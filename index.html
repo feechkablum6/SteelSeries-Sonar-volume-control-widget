@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="styles.css">
+    <!-- Подключаем иконки -->
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+</head>
+
+<body>
+    <!-- Драг-зона -->
+    <div class="drag-region"></div>
+
+    <div class="container">
+        <!-- Канал 1: GAME (ИГРА) -->
+        <div class="channel" data-channel-id="game">
+            <div class="header">
+                <div class="header-top">
+                    <span class="material-icons-round icon">sports_esports</span>
+                    <span class="title">ИГРА</span>
+                </div>
+                <div class="preset-pill green">Custom</div>
+                <div class="device-info">
+                    <span class="material-icons-round small-icon">link</span>
+                    <span class="device-name">Динамики (High Def...</span>
+                    <span class="device-vol">100%</span>
+                </div>
+            </div>
+            <div class="slider-container">
+                <div class="slider-track-bg"></div>
+                <input type="range" min="0" max="100" value="50" class="vertical-slider" orient="vertical">
+            </div>
+            <div class="controls-area">
+                <button class="mute-icon-btn"><span class="material-icons-round">volume_up</span></button>
+            </div>
+        </div>
+
+        <!-- Канал 2: CHAT (ЧАТ) -->
+        <div class="channel" data-channel-id="chat">
+            <div class="header">
+                <div class="header-top">
+                    <span class="material-icons-round icon">chat_bubble</span>
+                    <span class="title">ЧАТ</span>
+                </div>
+                <div class="preset-pill blue">Custom</div>
+                <div class="device-info">
+                    <span class="material-icons-round small-icon">link</span>
+                    <span class="device-name">Динамики (High Def...</span>
+                    <span class="device-vol">100%</span>
+                </div>
+            </div>
+            <div class="slider-container">
+                <div class="slider-track-bg"></div>
+                <input type="range" min="0" max="100" value="50" class="vertical-slider" orient="vertical">
+            </div>
+            <div class="controls-area">
+                <button class="mute-icon-btn"><span class="material-icons-round">volume_up</span></button>
+            </div>
+        </div>
+
+        <!-- Канал 3: MEDIA (МЕДИА) -->
+        <div class="channel" data-channel-id="media">
+            <div class="header">
+                <div class="header-top">
+                    <span class="material-icons-round icon">movie</span>
+                    <span class="title">МЕДИА</span>
+                </div>
+                <div class="preset-pill purple">Movie: Clear...</div>
+                <div class="device-info">
+                    <span class="material-icons-round small-icon">link</span>
+                    <span class="device-name">Динамики (High Def...</span>
+                    <span class="device-vol">100%</span>
+                </div>
+            </div>
+            <div class="slider-container">
+                <div class="slider-track-bg"></div>
+                <input type="range" min="0" max="100" value="50" class="vertical-slider" orient="vertical">
+            </div>
+            <div class="controls-area">
+                <button class="mute-icon-btn"><span class="material-icons-round">volume_up</span></button>
+            </div>
+        </div>
+
+        <!-- Канал 4: AUX (МУЗЫКА) -->
+        <div class="channel" data-channel-id="aux">
+            <div class="header">
+                <div class="header-top">
+                    <span class="material-icons-round icon">music_note</span>
+                    <span class="title">МУЗЫКА</span>
+                </div>
+                <div class="preset-pill pink">Music: Punc...</div>
+                <div class="device-info">
+                    <span class="material-icons-round small-icon">link</span>
+                    <span class="device-name">Динамики (High Def...</span>
+                    <span class="device-vol">100%</span>
+                </div>
+            </div>
+            <div class="slider-container">
+                <div class="slider-track-bg"></div>
+                <input type="range" min="0" max="100" value="50" class="vertical-slider" orient="vertical">
+            </div>
+            <div class="controls-area">
+                <button class="mute-icon-btn"><span class="material-icons-round">volume_up</span></button>
+            </div>
+        </div>
+
+        <!-- Канал 5: MIC (МИКРОФОН) -->
+        <div class="channel" data-channel-id="mic">
+            <div class="header">
+                <div class="header-top">
+                    <span class="material-icons-round icon">mic</span>
+                    <span class="title">МИКРОФОН</span>
+                </div>
+                <div class="preset-pill orange">Custom</div>
+                <div class="device-info">
+                    <span class="material-icons-round small-icon">link</span>
+                    <span class="device-name">Sonar Microphone</span>
+                    <span class="device-vol">100%</span>
+                </div>
+            </div>
+            <div class="slider-container">
+                <div class="slider-track-bg"></div>
+                <input type="range" min="0" max="100" value="50" class="vertical-slider" orient="vertical">
+            </div>
+            <div class="controls-area">
+                <button class="mute-icon-btn"><span class="material-icons-round">volume_up</span></button>
+            </div>
+        </div>
+    </div>
+    <script src="renderer.js"></script>
+</body>
+
+</html>

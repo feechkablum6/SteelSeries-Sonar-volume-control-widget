@@ -1,0 +1,9 @@
+node_modules/
+dist/
+build/
+*.log
+.DS_Store
+Thumbs.db
+widget-settings.json
+test-sonar-api.js
+steelseries-sonar-py-master/
