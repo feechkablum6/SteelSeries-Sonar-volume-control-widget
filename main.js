@@ -93,17 +93,20 @@ const IGNORE_CLASSES = [
     'Xaml_WindowedPopupClass', 'PopupHost', 'TaskListThumbnailWnd',
     'MSTaskSwWClass', 'MSTaskListWClass', 'ToolbarWindow32',
     'TrayNotifyWnd', 'SysPager', 'ReBarWindow32', 'Button',
-    'tooltips_class32', 'SysShadow', '#32768'
+    'tooltips_class32', 'SysShadow', '#32768', 'TaskManagerWindow',
+    'CROSVM_1', 'CROSVM_0' // WSL/Android subsystem
 ];
 
 // Нормальная позиция виджета (для проверки когда он скрыт)
 let widgetNormalPosition = null;
 
-// Проверяет, перекрыта ли область виджета окнами на его мониторе
+// Проверяет, перекрыто ли окно виджета любым окном на том же мониторе
 function isWidgetAreaCovered() {
     if (!user32 || !mainWindow || mainWindow.isDestroyed()) return false;
     
-    const wb = mainWindow.getBounds();
+    // Используем сохранённую позицию, если окно скрыто
+    const wb = mainWindow.isVisible() ? mainWindow.getBounds() : 
+        (widgetNormalPosition ? { x: widgetNormalPosition.x, y: widgetNormalPosition.y, width: 450, height: 300 } : mainWindow.getBounds());
     const widgetRect = { left: wb.x, top: wb.y, right: wb.x + wb.width, bottom: wb.y + wb.height };
     const widgetDisplay = getDisplayForRect(widgetRect);
     
@@ -114,40 +117,53 @@ function isWidgetAreaCovered() {
     const GWL_EXSTYLE = -20, WS_EX_TOOLWINDOW = 0x80, WS_EX_APPWINDOW = 0x40000;
     
     try {
+        // Перебираем все окна в Z-order (сверху вниз)
         user32.EnumWindows((hwnd) => {
-            if (isCovered) return 1;
+            if (isCovered) return 1; // Уже нашли перекрывающее окно
+            
             try {
                 let hwndNum = typeof hwnd === 'number' ? hwnd : (hwnd?.address !== undefined ? Number(hwnd.address) : 0);
-                if (hwndNum === ourHwndNum || !user32.IsWindowVisible(hwnd)) return 1;
                 
+                // Пропускаем наше окно
+                if (hwndNum === ourHwndNum) return 1;
+                
+                // Пропускаем невидимые окна
+                if (!user32.IsWindowVisible(hwnd)) return 1;
+                
+                // Проверяем класс окна
                 const buf = Buffer.alloc(256);
                 user32.GetClassNameA(hwnd, buf, 256);
                 const className = buf.toString('utf8').split('\0')[0];
+                
+                // Пропускаем системные окна
                 if (IGNORE_CLASSES.includes(className)) return 1;
                 
+                // Пропускаем WPF служебные окна
+                if (className.startsWith('HwndWrapper[')) return 1;
+                
+                // Пропускаем tool windows (без кнопки на панели задач)
                 const exStyle = user32.GetWindowLongA(hwnd, GWL_EXSTYLE);
                 if ((exStyle & WS_EX_TOOLWINDOW) && !(exStyle & WS_EX_APPWINDOW)) return 1;
                 
+                // Получаем размеры окна
                 const rect = {};
                 if (!user32.GetWindowRect(hwnd, rect)) return 1;
-                if ((rect.right - rect.left) < 50 || (rect.bottom - rect.top) < 50) return 1;
                 
+                // Пропускаем слишком маленькие окна
+                if ((rect.right - rect.left) < 100 || (rect.bottom - rect.top) < 100) return 1;
+                
+                // Пропускаем Chrome/Electron popup окна (tooltips, dropdowns и т.д.)
+                // Основные окна браузера обычно больше 500x400
+                if (className === 'Chrome_WidgetWin_1' || className === 'Chrome_WidgetWin_0') {
+                    if ((rect.right - rect.left) < 500 || (rect.bottom - rect.top) < 400) return 1;
+                }
+                
+                // Пропускаем окна на других мониторах
                 const windowDisplay = getDisplayForRect(rect);
                 if (windowDisplay.id !== widgetDisplay.id) return 1;
                 
-                // Пропустить если это наше окно (сравниваем по точным координатам)
-                if (rect.left === widgetRect.left && rect.top === widgetRect.top &&
-                    rect.right === widgetRect.right && rect.bottom === widgetRect.bottom) return 1;
-                
+                // Проверяем перекрытие
                 if (rectsOverlap(rect, widgetRect)) {
-                    // Дополнительная проверка — пропустить наше Electron окно по размеру
-                    const wb = mainWindow.getBounds();
-                    const winW = rect.right - rect.left;
-                    const winH = rect.bottom - rect.top;
-
-                    if (className === 'Chrome_WidgetWin_1' && winW === wb.width && winH === wb.height) {
-                        return 1; // Это наше окно
-                    }
                     isCovered = true;
                 }
             } catch (e) {}
@@ -160,7 +176,6 @@ function isWidgetAreaCovered() {
 
 function shouldWidgetBeVisible() {
     if (!mainWindow || mainWindow.isDestroyed()) return false;
-    if (mainWindow.isFocused()) return true;
     return !isWidgetAreaCovered();
 }
 
@@ -212,36 +227,41 @@ function createWindow() {
         widgetNormalPosition = { x: initBounds.x, y: initBounds.y };
     }
     
-    let hideTimeout = null;
-    const HIDE_DELAY = 80;
+    const CHECK_INTERVAL = 50;
+    const STABILITY_THRESHOLD = 5; // Сколько проверок подряд нужно для смены состояния
     
-    setInterval(() => {
-        if (!mainWindow || mainWindow.isDestroyed()) return;
-        
-        const shouldShow = shouldWidgetBeVisible();
-        
-        if (shouldShow && !currentVisible) {
-            // Показать
-            if (hideTimeout) { clearTimeout(hideTimeout); hideTimeout = null; }
-            currentVisible = true;
-            mainWindow.showInactive();
-            // Вернуть наверх через Windows API
-            if (user32) {
-                try {
-                    const hwnd = mainWindow.getNativeWindowHandle();
-                    user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0003);
-                } catch (e) {}
+    let stableCount = 0;      // Счётчик стабильных проверок
+    let lastState = null;     // Последнее состояние (true = показать, false = скрыть)
+    
+    // Автоскрытие при перекрытии окнами (с задержкой старта)
+    setTimeout(() => {
+        setInterval(() => {
+            if (!mainWindow || mainWindow.isDestroyed()) return;
+            
+            const shouldShow = shouldWidgetBeVisible();
+            
+            // Если состояние изменилось — сбрасываем счётчик
+            if (shouldShow !== lastState) {
+                lastState = shouldShow;
+                stableCount = 1;
+                return;
             }
-        } else if (!shouldShow && currentVisible && !hideTimeout) {
-            hideTimeout = setTimeout(() => {
-                hideTimeout = null;
-                if (mainWindow && !mainWindow.isDestroyed() && !shouldWidgetBeVisible()) {
+            
+            // Состояние стабильно — увеличиваем счётчик
+            stableCount++;
+            
+            // Применяем изменение только после достижения порога стабильности
+            if (stableCount === STABILITY_THRESHOLD) {
+                if (shouldShow && !currentVisible) {
+                    currentVisible = true;
+                    mainWindow.showInactive();
+                } else if (!shouldShow && currentVisible) {
                     currentVisible = false;
                     mainWindow.hide();
                 }
-            }, HIDE_DELAY);
-        }
-    }, 50);
+            }
+        }, CHECK_INTERVAL);
+    }, 1000); // Задержка 1 сек перед включением автоскрытия
     
     // Обновлять нормальную позицию при перемещении (только когда видим)
     mainWindow.on('moved', () => {
@@ -252,6 +272,15 @@ function createWindow() {
                 saveSettings({ x: b.x, y: b.y });
             }
         }
+    });
+    
+    // Восстановить после Win+D (minimize)
+    mainWindow.on('restore', () => {
+        currentVisible = true;
+    });
+    
+    mainWindow.on('show', () => {
+        currentVisible = true;
     });
 }
 
