@@ -185,6 +185,7 @@ function createWindow() {
         width: 450, height: 300, frame: false, transparent: true,
         backgroundColor: '#00000000', hasShadow: false, resizable: false,
         skipTaskbar: true, alwaysOnTop: true, show: true,
+        icon: path.join(__dirname, 'icon-256.ico'),
         webPreferences: { nodeIntegration: true, contextIsolation: false }
     };
     if (settings?.x !== undefined) { opts.x = settings.x; opts.y = settings.y; }

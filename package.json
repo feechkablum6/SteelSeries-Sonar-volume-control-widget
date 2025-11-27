@@ -21,8 +21,11 @@
     "appId": "com.stellgg.sonar-widget",
     "productName": "Sonar Glass Widget",
     "win": {
-      "target": ["nsis", "portable"],
-      "icon": "icon.ico"
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "icon-256.ico"
     },
     "nsis": {
       "oneClick": true,
@@ -36,7 +39,7 @@
       "audio-controller.js",
       "index.html",
       "styles.css",
-      "icon.ico"
+      "icon-256.ico"
     ]
   }
 }
