@@ -7,3 +7,21 @@ Thumbs.db
 widget-settings.json
 test-sonar-api.js
 steelseries-sonar-py-master/
+
+# AI Agent files
+AGENTS.md
+agents.md
+CLAUDE.md
+claude.md
+GEMINI.md
+gemini.md
+codemap.md
+.claude/
+.cursor/
+.cursorrules
+.kiro/
+.agent/
+.opencode/
+.supercode/
+.omc/
+.factory/
