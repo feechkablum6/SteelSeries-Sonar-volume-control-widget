@@ -188,10 +188,29 @@ body {
 }
 
 .device-name {
+    appearance: none;
+    border: 0;
+    padding: 1px 2px;
+    border-radius: 3px;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    cursor: pointer;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 50px;
+}
+
+.device-name:hover,
+.device-name[aria-expanded="true"] {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.device-name:disabled {
+    cursor: wait;
+    opacity: 0.65;
 }
 
 .device-vol {
@@ -200,6 +219,81 @@ body {
 
 .device-info.warning {
     color: rgba(255, 200, 100, 0.9);
+}
+
+.device-picker {
+    position: fixed;
+    z-index: 1200;
+    display: none;
+    width: 205px;
+    max-height: 220px;
+    padding: 7px;
+    box-sizing: border-box;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    border-radius: 9px;
+    background: rgba(10, 18, 31, 0.96);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: blur(16px) saturate(130%);
+    color: #fff;
+}
+
+.device-picker.open {
+    display: block;
+}
+
+.device-picker-title {
+    padding: 2px 5px 6px;
+    color: rgba(255, 255, 255, 0.56);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.device-picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 184px;
+    overflow-y: auto;
+}
+
+.device-picker-option,
+.device-picker-empty {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 6px;
+    text-align: left;
+    font: 10px/1.25 'Segoe UI', sans-serif;
+}
+
+.device-picker-option {
+    background: transparent;
+    color: rgba(255, 255, 255, 0.82);
+    cursor: pointer;
+}
+
+.device-picker-option:hover {
+    background: rgba(71, 150, 255, 0.18);
+    color: #fff;
+}
+
+.device-picker-option.selected {
+    background: rgba(65, 145, 255, 0.28);
+    color: #fff;
+}
+
+.device-picker-option.selected::before {
+    content: "✓";
+    margin-right: 6px;
+    color: #72b7ff;
+}
+
+.device-picker-empty {
+    color: rgba(255, 255, 255, 0.48);
 }
 
 /* --- SLIDER AREA --- */

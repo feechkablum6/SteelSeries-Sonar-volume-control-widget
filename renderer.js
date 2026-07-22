@@ -2,21 +2,16 @@
 // Handles UI interactions for the volume mixer with real audio control
 
 const { ipcRenderer } = require('electron');
+const { buildDeviceRouting } = require('./device-routing');
 
 // Сопоставление index канала с его ID (5 каналов, без master)
 const CHANNEL_IDS = ['game', 'chat', 'media', 'aux', 'mic'];
 
-// Маппинг API role на channelId
-const ROLE_TO_CHANNEL = {
-    'game': 'game',
-    'chatRender': 'chat',
-    'media': 'media',
-    'aux': 'aux',
-    'chatCapture': 'mic'
-};
-
 // Флаг для предотвращения обновления во время перетаскивания слайдера
 let isUserDragging = false;
+let isDeviceSwitching = false;
+let deviceRouting = null;
+let activeDeviceChannel = null;
 
 // Интервал синхронизации (мс)
 const SYNC_INTERVAL = 500;
@@ -24,6 +19,7 @@ const SYNC_INTERVAL = 500;
 document.addEventListener('DOMContentLoaded', async () => {
     const channels = document.querySelectorAll('.channel');
     setupDesktopDrag();
+    setupDevicePicker();
 
     // Проверить доступность Sonar
     const availabilityResult = await ipcRenderer.invoke('audio:check-availability');
@@ -96,23 +92,21 @@ function setupDesktopDrag() {
  * Синхронизация с Sonar API
  */
 async function syncWithSonar() {
-    if (isUserDragging) return;
+    if (isUserDragging || isDeviceSwitching) return;
 
     try {
         const result = await ipcRenderer.invoke('audio:get-full-state');
         if (!result.success || !result.state) return;
 
-        const { volumes, devices } = result.state;
+        const { volumes, devices, redirections } = result.state;
         
         // Обновить громкости и mute
         if (volumes?.devices) {
             updateVolumesFromState(volumes.devices);
         }
 
-        // Обновить названия устройств
-        if (devices?.length > 0) {
-            updateDeviceNames(devices);
-        }
+        deviceRouting = buildDeviceRouting(devices, redirections);
+        updateDeviceNames(deviceRouting);
     } catch (error) {
         console.error('Sync error:', error);
     }
@@ -169,24 +163,138 @@ function updateVolumesFromState(devicesData) {
 /**
  * Обновить названия устройств
  */
-function updateDeviceNames(devices) {
-    devices.forEach(device => {
-        const channelId = ROLE_TO_CHANNEL[device.role];
-        if (!channelId) return;
-
+function updateDeviceNames(routing) {
+    CHANNEL_IDS.forEach(channelId => {
         const channel = document.querySelector(`.channel[data-channel-id="${channelId}"]`);
         if (!channel) return;
 
         const deviceNameEl = channel.querySelector('.device-name');
-        if (deviceNameEl && device.friendlyName) {
-            // Сократить название если слишком длинное
-            const shortName = shortenDeviceName(device.friendlyName);
-            if (deviceNameEl.textContent !== shortName) {
-                deviceNameEl.textContent = shortName;
-                deviceNameEl.title = device.friendlyName; // Полное имя в tooltip
-            }
-        }
+        if (!deviceNameEl || deviceNameEl.dataset.error === 'true') return;
+
+        const selectedDevice = routing?.[channelId]?.selectedDevice;
+        const fullName = selectedDevice?.friendlyName || 'Не выбрано';
+        deviceNameEl.textContent = shortenDeviceName(fullName);
+        deviceNameEl.title = fullName;
     });
+}
+
+function setupDevicePicker() {
+    const picker = document.querySelector('.device-picker');
+    if (!picker) return;
+
+    document.querySelectorAll('.device-name').forEach(button => {
+        button.setAttribute('aria-expanded', 'false');
+        button.addEventListener('click', event => {
+            event.stopPropagation();
+            const channelId = button.closest('.channel')?.dataset.channelId;
+            if (!channelId) return;
+
+            if (activeDeviceChannel === channelId) {
+                closeDevicePicker();
+                return;
+            }
+            openDevicePicker(channelId, button);
+        });
+    });
+
+    picker.addEventListener('pointerdown', event => event.stopPropagation());
+    document.addEventListener('pointerdown', event => {
+        if (!event.target.closest('.device-picker, .device-name')) closeDevicePicker();
+    });
+    document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeDevicePicker();
+    });
+}
+
+function openDevicePicker(channelId, anchor) {
+    const picker = document.querySelector('.device-picker');
+    const title = picker?.querySelector('.device-picker-title');
+    const list = picker?.querySelector('.device-picker-list');
+    if (!picker || !title || !list) return;
+
+    closeDevicePicker();
+    activeDeviceChannel = channelId;
+    anchor.setAttribute('aria-expanded', 'true');
+    title.textContent = channelId === 'mic' ? 'Устройство ввода' : 'Устройство вывода';
+    renderDeviceOptions(channelId, list);
+
+    picker.classList.add('open');
+    picker.setAttribute('aria-hidden', 'false');
+    const anchorRect = anchor.getBoundingClientRect();
+    const pickerWidth = 205;
+    const left = Math.max(5, Math.min(window.innerWidth - pickerWidth - 5, anchorRect.left));
+    const top = Math.min(window.innerHeight - picker.offsetHeight - 5, anchorRect.bottom + 5);
+    picker.style.left = `${left}px`;
+    picker.style.top = `${Math.max(5, top)}px`;
+}
+
+function renderDeviceOptions(channelId, list) {
+    list.replaceChildren();
+    const route = deviceRouting?.[channelId];
+    const devices = route?.devices || [];
+
+    if (devices.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'device-picker-empty';
+        empty.textContent = 'Нет доступных устройств';
+        list.appendChild(empty);
+        return;
+    }
+
+    devices.forEach(device => {
+        const option = document.createElement('button');
+        option.type = 'button';
+        option.className = 'device-picker-option';
+        option.textContent = device.friendlyName;
+        option.title = device.friendlyName;
+        option.setAttribute('role', 'menuitemradio');
+        const isSelected = device.id === route.selectedDeviceId;
+        option.classList.toggle('selected', isSelected);
+        option.setAttribute('aria-checked', String(isSelected));
+        option.addEventListener('click', () => selectAudioDevice(channelId, device.id));
+        list.appendChild(option);
+    });
+}
+
+function closeDevicePicker() {
+    document.querySelectorAll('.device-name[aria-expanded="true"]').forEach(button => {
+        button.setAttribute('aria-expanded', 'false');
+    });
+    const picker = document.querySelector('.device-picker');
+    picker?.classList.remove('open');
+    picker?.setAttribute('aria-hidden', 'true');
+    activeDeviceChannel = null;
+}
+
+async function selectAudioDevice(channelId, deviceId) {
+    if (isDeviceSwitching) return;
+    const channel = document.querySelector(`.channel[data-channel-id="${channelId}"]`);
+    const deviceNameEl = channel?.querySelector('.device-name');
+
+    isDeviceSwitching = true;
+    if (deviceNameEl) deviceNameEl.disabled = true;
+
+    try {
+        const result = await ipcRenderer.invoke('audio:set-device', channelId, deviceId);
+        if (!result.success) throw new Error(result.error || 'Sonar отклонил переключение');
+        closeDevicePicker();
+    } catch (error) {
+        console.error(`Error setting device for ${channelId}:`, error);
+        if (deviceNameEl) {
+            deviceNameEl.dataset.error = 'true';
+            deviceNameEl.textContent = 'Ошибка';
+            deviceNameEl.title = error.message;
+            setTimeout(() => {
+                delete deviceNameEl.dataset.error;
+                syncWithSonar();
+            }, 1200);
+        }
+    } finally {
+        isDeviceSwitching = false;
+        if (deviceNameEl) deviceNameEl.disabled = false;
+    }
+
+    await syncWithSonar();
 }
 
 /**

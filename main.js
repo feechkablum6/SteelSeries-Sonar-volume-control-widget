@@ -264,3 +264,12 @@ app.on('before-quit', () => {
     if (windowRecoveryTimer) clearTimeout(windowRecoveryTimer);
     windowRecoveryTimer = null;
 });
+
+ipcMain.handle('audio:set-device', async (_, channelId, deviceId) => {
+    try {
+        const success = await audioController.setClassicRedirection(channelId, deviceId);
+        return { success };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});

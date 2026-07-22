@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html>
 
 <head>
@@ -23,7 +23,7 @@
                 <div class="preset-pill green">Custom</div>
                 <div class="device-info">
                     <span class="material-icons-round small-icon">link</span>
-                    <span class="device-name">Динамики (High Def...</span>
+                    <button type="button" class="device-name" aria-label="Выбрать устройство вывода">Не выбрано</button>
                     <span class="device-vol">100%</span>
                 </div>
             </div>
@@ -46,7 +46,7 @@
                 <div class="preset-pill blue">Custom</div>
                 <div class="device-info">
                     <span class="material-icons-round small-icon">link</span>
-                    <span class="device-name">Динамики (High Def...</span>
+                    <button type="button" class="device-name" aria-label="Выбрать устройство вывода">Не выбрано</button>
                     <span class="device-vol">100%</span>
                 </div>
             </div>
@@ -69,7 +69,7 @@
                 <div class="preset-pill purple">Movie: Clear...</div>
                 <div class="device-info">
                     <span class="material-icons-round small-icon">link</span>
-                    <span class="device-name">Динамики (High Def...</span>
+                    <button type="button" class="device-name" aria-label="Выбрать устройство вывода">Не выбрано</button>
                     <span class="device-vol">100%</span>
                 </div>
             </div>
@@ -92,7 +92,7 @@
                 <div class="preset-pill pink">Music: Punc...</div>
                 <div class="device-info">
                     <span class="material-icons-round small-icon">link</span>
-                    <span class="device-name">Динамики (High Def...</span>
+                    <button type="button" class="device-name" aria-label="Выбрать устройство вывода">Не выбрано</button>
                     <span class="device-vol">100%</span>
                 </div>
             </div>
@@ -115,7 +115,7 @@
                 <div class="preset-pill orange">Custom</div>
                 <div class="device-info">
                     <span class="material-icons-round small-icon">link</span>
-                    <span class="device-name">Sonar Microphone</span>
+                    <button type="button" class="device-name" aria-label="Выбрать устройство ввода">Не выбрано</button>
                     <span class="device-vol">100%</span>
                 </div>
             </div>
@@ -127,6 +127,10 @@
                 <button class="mute-icon-btn"><span class="material-icons-round">volume_up</span></button>
             </div>
         </div>
+    </div>
+    <div class="device-picker" role="menu" aria-hidden="true">
+        <div class="device-picker-title"></div>
+        <div class="device-picker-list"></div>
     </div>
     <script src="renderer.js"></script>
 </body>

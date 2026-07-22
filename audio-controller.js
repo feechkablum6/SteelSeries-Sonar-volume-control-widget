@@ -1,10 +1,11 @@
-// audio-controller.js
+﻿// audio-controller.js
 // Модуль для управления громкостью через SteelSeries Sonar API
 
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const { CHANNEL_IDS } = require('./device-routing');
 
 // Отключить проверку SSL
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
@@ -28,6 +29,7 @@ const CHANNEL_MAPPING = {
 
 let webServerAddress = null;
 let isInitialized = false;
+const ROUTING_CHANNELS = new Set(CHANNEL_IDS);
 
 /**
  * HTTP запрос
@@ -253,6 +255,52 @@ async function getAudioDevices() {
     }
 }
 
+function createRoutingClient({ initialize, getAddress, request }) {
+    return {
+        async getClassicRedirections() {
+            if (!await initialize()) return [];
+
+            try {
+                const res = await request(`${getAddress()}/classicRedirections`);
+                if (res.status !== 200) return [];
+                return JSON.parse(res.data);
+            } catch {
+                return [];
+            }
+        },
+
+        async setClassicRedirection(channelId, deviceId) {
+            if (!ROUTING_CHANNELS.has(channelId) || typeof deviceId !== 'string' || !deviceId) {
+                return false;
+            }
+            if (!await initialize()) return false;
+
+            try {
+                const url = `${getAddress()}/classicRedirections/${channelId}/deviceId/${deviceId}`;
+                const res = await request(url, 'PUT');
+                return res.status === 200;
+            } catch (error) {
+                console.error(`Failed to set audio device for ${channelId}:`, error.message);
+                return false;
+            }
+        }
+    };
+}
+
+const routingClient = createRoutingClient({
+    initialize,
+    getAddress: () => webServerAddress,
+    request: httpRequest
+});
+
+async function getClassicRedirections() {
+    return routingClient.getClassicRedirections();
+}
+
+async function setClassicRedirection(channelId, deviceId) {
+    return routingClient.setClassicRedirection(channelId, deviceId);
+}
+
 /**
  * Получить полное состояние для синхронизации (громкости + устройства)
  */
@@ -260,14 +308,16 @@ async function getFullState() {
     if (!await initialize()) return null;
 
     try {
-        const [volumeRes, devicesRes] = await Promise.all([
+        const [volumeRes, devicesRes, redirectionsRes] = await Promise.all([
             httpRequest(webServerAddress + '/volumeSettings/classic'),
-            httpRequest(webServerAddress + '/audioDevices')
+            httpRequest(webServerAddress + '/audioDevices'),
+            httpRequest(webServerAddress + '/classicRedirections')
         ]);
 
         const result = {
             volumes: null,
-            devices: []
+            devices: [],
+            redirections: []
         };
 
         if (volumeRes.status === 200) {
@@ -276,6 +326,10 @@ async function getFullState() {
 
         if (devicesRes.status === 200) {
             result.devices = JSON.parse(devicesRes.data);
+        }
+
+        if (redirectionsRes.status === 200) {
+            result.redirections = JSON.parse(redirectionsRes.data);
         }
 
         return result;
@@ -296,6 +350,9 @@ module.exports = {
     getChatMix,
     setChatMix,
     getAudioDevices,
+    createRoutingClient,
+    getClassicRedirections,
+    setClassicRedirection,
     getFullState,
     CHANNEL_MAPPING
 };
