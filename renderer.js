@@ -1,4 +1,4 @@
-// renderer.js
+﻿// renderer.js
 // Handles UI interactions for the volume mixer with real audio control
 
 const { ipcRenderer } = require('electron');
@@ -23,6 +23,7 @@ const SYNC_INTERVAL = 500;
 
 document.addEventListener('DOMContentLoaded', async () => {
     const channels = document.querySelectorAll('.channel');
+    setupDesktopDrag();
 
     // Проверить доступность Sonar
     const availabilityResult = await ipcRenderer.invoke('audio:check-availability');
@@ -42,6 +43,54 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Запустить периодическую синхронизацию
     setInterval(syncWithSonar, SYNC_INTERVAL);
 });
+
+function setupDesktopDrag() {
+    const dragRegion = document.querySelector('.drag-region');
+    if (!dragRegion) return;
+
+    let activePointerId = null;
+    let pendingPoint = null;
+    let animationFrame = null;
+
+    const sendPendingPoint = () => {
+        animationFrame = null;
+        if (!pendingPoint) return;
+        ipcRenderer.send('desktop:drag-move', pendingPoint);
+        pendingPoint = null;
+    };
+
+    const finishDrag = () => {
+        if (activePointerId === null) return;
+        if (animationFrame !== null) {
+            cancelAnimationFrame(animationFrame);
+            sendPendingPoint();
+        }
+        activePointerId = null;
+        dragRegion.classList.remove('dragging');
+        ipcRenderer.send('desktop:drag-end');
+    };
+
+    dragRegion.addEventListener('pointerdown', (event) => {
+        if (event.button !== 0 || activePointerId !== null) return;
+        activePointerId = event.pointerId;
+        dragRegion.setPointerCapture(event.pointerId);
+        dragRegion.classList.add('dragging');
+        ipcRenderer.send('desktop:drag-start', { x: event.screenX, y: event.screenY });
+        event.preventDefault();
+    });
+
+    dragRegion.addEventListener('pointermove', (event) => {
+        if (event.pointerId !== activePointerId) return;
+        pendingPoint = { x: event.screenX, y: event.screenY };
+        if (animationFrame === null) {
+            animationFrame = requestAnimationFrame(sendPendingPoint);
+        }
+    });
+
+    dragRegion.addEventListener('pointerup', finishDrag);
+    dragRegion.addEventListener('pointercancel', finishDrag);
+    dragRegion.addEventListener('lostpointercapture', finishDrag);
+}
 
 /**
  * Синхронизация с Sonar API

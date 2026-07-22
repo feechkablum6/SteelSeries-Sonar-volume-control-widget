@@ -35,7 +35,7 @@
 
 **Step 2:** Реализовать поиск окна `Progman`, `SHELLDLL_DefView` и `SysListView32`, чтение `LVM_GETITEMRECT`, преобразование координат и освобождение нативной памяти.
 
-**Step 3:** Установить `WS_CHILD`, `WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`, убрать `WS_POPUP`/`WS_EX_APPWINDOW`, выполнить `SetParent` и разместить виджет над слоем ярлыков.
+**Step 3:** Сохранить окно верхнеуровневым, установить `WS_POPUP`, `WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE`, убрать `WS_CHILD`/`WS_EX_APPWINDOW`, назначить `Progman` владельцем через `GWLP_HWNDPARENT` и разместить виджет непосредственно над владельцем в Z-порядке.
 
 **Step 4:** Заменить старый цикл видимости на сторожевую синхронизацию рабочего стола без `hide()`/`show()`.
 

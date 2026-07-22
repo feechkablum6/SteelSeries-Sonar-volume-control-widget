@@ -7,6 +7,7 @@
   "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "test": "node --test test/*.test.js",
     "build": "electron-builder --win",
     "build:portable": "electron-builder --win portable"
   },
@@ -37,6 +38,9 @@
       "main.js",
       "renderer.js",
       "audio-controller.js",
+      "desktop-host.js",
+      "desktop-layout.js",
+      "drag-position.js",
       "index.html",
       "styles.css",
       "icon-256.ico"

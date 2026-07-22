@@ -14,8 +14,13 @@ body {
     left: 0;
     width: 100%;
     height: 15px;
-    -webkit-app-region: drag;
     z-index: 999;
+    cursor: grab;
+    touch-action: none;
+}
+
+.drag-region.dragging {
+    cursor: grabbing;
 }
 
 .container {

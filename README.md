@@ -1,67 +1,77 @@
-# Sonar Glass Widget
+﻿# Sonar Glass Widget
 
-Desktop widget for controlling SteelSeries Sonar audio channels with a beautiful glassmorphism UI.
+Интерактивный виджет рабочего стола для управления аудиоканалами SteelSeries Sonar.
 
 ![Widget Preview](preview.png)
 
-## Features
+## Возможности
 
-- Real-time volume control for all Sonar channels (Game, Chat, Media, Music, Mic)
-- Glassmorphism transparent UI
-- Auto-sync with SteelSeries GG
-- Smart auto-hide when covered by other windows
-- Auto-start with Windows
-- Draggable widget position (saved between sessions)
+- Управление громкостью каналов Game, Chat, Media, Music и Mic в реальном времени
+- Прозрачный интерфейс в стиле glassmorphism
+- Автоматическая синхронизация со SteelSeries GG
+- Настоящий слой рабочего стола: обычные окна естественно перекрывают виджет
+- Отсутствие виджета в панели задач и Alt+Tab
+- Ярлыки рабочего стола являются препятствиями при перетаскивании
+- Автоматическое восстановление после перезапуска Explorer
+- Сохранение позиции между запусками и автозапуск с Windows
 
-## Requirements
+## Требования
 
 - Windows 10/11
-- SteelSeries GG with Sonar enabled
-- Node.js 16+ (for development)
+- SteelSeries GG с включённым Sonar
+- Node.js 16+ для разработки
 
-## Installation
+## Установка
 
-### From Release
-1. Download the latest release from [Releases](../../releases)
-2. Run the installer or portable version
-3. Widget will auto-start with Windows
+### Готовая сборка
+1. Скачайте последний выпуск из раздела [Releases](../../releases).
+2. Запустите установщик или portable-версию.
+3. Виджет автоматически добавится в автозапуск Windows.
 
-### From Source
+### Из исходного кода
 ```bash
-# Clone the repository
+# Клонировать репозиторий
 git clone https://github.com/feechkablum6/SteelSeries-Sonar-volume-control-widget.git
 cd SteelSeries-Sonar-volume-control-widget
 
-# Install dependencies
+# Установить зависимости
 npm install
 
-# Run in development mode
+# Запустить в режиме разработки
 npm start
 
-# Build executable
+# Собрать исполняемый файл
 npm run build
 ```
 
-## Usage
+## Использование
 
-- **Drag** the top edge to move the widget
-- **Sliders** control volume for each channel
-- **Speaker icon** toggles mute
-- Widget **auto-hides** when covered by other windows
-- Changes sync with SteelSeries GG in real-time
+- Перетаскивайте виджет за верхнюю полосу.
+- Слайдеры управляют громкостью каналов.
+- Значок динамика включает и выключает звук.
+- Виджет не проходит через ярлыки и не может быть установлен поверх них.
+- Обычные окна перекрывают виджет без его скрытия и повторного показа.
+- Изменения синхронизируются со SteelSeries GG в реальном времени.
 
-## Tech Stack
+## Проверка
+
+```bash
+npm test
+npm start
+```
+
+## Технологии
 
 - Electron 28
-- SteelSeries Sonar API (unofficial)
-- Koffi (Windows API bindings)
+- Неофициальный API SteelSeries Sonar
+- Koffi для вызовов Windows API
 - Vanilla JavaScript
 - CSS Glassmorphism
 
-## License
+## Лицензия
 
 MIT
 
-## Credits
+## Благодарности
 
-- SteelSeries Sonar API reverse-engineering: [steelseries-sonar-py](https://github.com/Mark7888/steelseries-sonar-py)
+- Обратное проектирование API SteelSeries Sonar: [steelseries-sonar-py](https://github.com/Mark7888/steelseries-sonar-py)
