@@ -16,6 +16,8 @@ let activeDeviceChannel = null;
 // Интервал синхронизации (мс)
 const SYNC_INTERVAL = 500;
 
+ipcRenderer.on('device-picker:dismiss', () => closeDevicePicker());
+
 document.addEventListener('DOMContentLoaded', async () => {
     const channels = document.querySelectorAll('.channel');
     setupDesktopDrag();
@@ -220,6 +222,7 @@ function openDevicePicker(channelId, anchor) {
 
     picker.classList.add('open');
     picker.setAttribute('aria-hidden', 'false');
+    ipcRenderer.send('device-picker:opened');
     const anchorRect = anchor.getBoundingClientRect();
     const pickerWidth = 205;
     const left = Math.max(5, Math.min(window.innerWidth - pickerWidth - 5, anchorRect.left));
@@ -257,13 +260,15 @@ function renderDeviceOptions(channelId, list) {
 }
 
 function closeDevicePicker() {
+    const picker = document.querySelector('.device-picker');
+    const wasOpen = picker?.classList.contains('open') || false;
     document.querySelectorAll('.device-name[aria-expanded="true"]').forEach(button => {
         button.setAttribute('aria-expanded', 'false');
     });
-    const picker = document.querySelector('.device-picker');
     picker?.classList.remove('open');
     picker?.setAttribute('aria-hidden', 'true');
     activeDeviceChannel = null;
+    if (wasOpen) ipcRenderer.send('device-picker:closed');
 }
 
 async function selectAudioDevice(channelId, deviceId) {

@@ -5,6 +5,10 @@ const koffi = require('koffi')
 const audioController = require('./audio-controller')
 const { DesktopHost, createWindowsDesktopNative } = require('./desktop-host')
 const { beginDrag, dragTarget } = require('./drag-position')
+const {
+    GlobalInputMonitor,
+    createWindowsGlobalInputNative
+} = require('./global-input-monitor')
 
 let mainWindow = null;
 let desktopHost = null;
@@ -12,6 +16,7 @@ let desktopNative = null;
 let desktopRefreshTimer = null;
 let windowRecoveryTimer = null;
 let dragSession = null;
+let globalInputMonitor = null;
 let isQuitting = false;
 const settingsPath = path.join(app.getPath('userData'), 'widget-settings.json');
 const WIDGET_SIZE = { width: 450, height: 300 };
@@ -148,6 +153,16 @@ function createWindow() {
         icon: path.join(__dirname, 'icon-256.ico'),
         webPreferences: { nodeIntegration: true, contextIsolation: false }
     });
+    globalInputMonitor = new GlobalInputMonitor(
+        createWindowsGlobalInputNative(koffi),
+        {
+            ownerProcessId: process.pid,
+            onDismiss: reason => {
+                if (!mainWindow || mainWindow.isDestroyed()) return;
+                mainWindow.webContents.send('device-picker:dismiss', reason);
+            }
+        }
+    );
 
     mainWindow.webContents.once('did-finish-load', () => {
         if (!connectToDesktop()) {
@@ -157,6 +172,8 @@ function createWindow() {
     });
 
     mainWindow.on('closed', () => {
+        globalInputMonitor?.stop();
+        globalInputMonitor = null;
         if (desktopRefreshTimer) clearInterval(desktopRefreshTimer);
         desktopRefreshTimer = null;
         desktopHost = null;
@@ -187,6 +204,16 @@ ipcMain.on('desktop:drag-end', () => {
     if (!dragSession) return;
     dragSession = null;
     saveWidgetPosition();
+});
+
+ipcMain.on('device-picker:opened', event => {
+    if (event.sender !== mainWindow?.webContents) return;
+    globalInputMonitor?.start();
+});
+
+ipcMain.on('device-picker:closed', event => {
+    if (event.sender !== mainWindow?.webContents) return;
+    globalInputMonitor?.stop();
 });
 
 // IPC Handlers — Sonar API (async)
@@ -261,6 +288,7 @@ app.whenReady().then(() => {
 
 app.on('before-quit', () => {
     isQuitting = true;
+    globalInputMonitor?.stop();
     if (windowRecoveryTimer) clearTimeout(windowRecoveryTimer);
     windowRecoveryTimer = null;
 });

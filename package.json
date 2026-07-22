@@ -42,6 +42,7 @@
       "desktop-host.js",
       "desktop-layout.js",
       "drag-position.js",
+      "global-input-monitor.js",
       "index.html",
       "styles.css",
       "icon-256.ico"
