@@ -1,5 +1,6 @@
 ﻿const { app, BrowserWindow, ipcMain } = require('electron')
 const path = require('path')
+const { screen } = require('electron')
 const fs = require('fs')
 const koffi = require('koffi')
 const audioController = require('./audio-controller')
@@ -135,7 +136,9 @@ function refreshDesktop() {
 
 function createWindow() {
     if (mainWindow || isQuitting) return;
-    desktopNative = createWindowsDesktopNative(koffi);
+    desktopNative = createWindowsDesktopNative(koffi, {
+        getDisplays: () => screen.getAllDisplays()
+    });
     desktopHost = new DesktopHost(desktopNative, { gap: ICON_GAP });
 
     mainWindow = new BrowserWindow({

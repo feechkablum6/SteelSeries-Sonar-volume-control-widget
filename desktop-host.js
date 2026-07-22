@@ -4,6 +4,64 @@ const {
     findNearestFreePosition
 } = require('./desktop-layout');
 
+function reservedRectsFromDisplays(displays) {
+    const reservedRects = [];
+
+    for (const display of displays ?? []) {
+        const bounds = display?.bounds;
+        const workArea = display?.workArea;
+        if (!bounds || !workArea || bounds.width <= 0 || bounds.height <= 0) continue;
+
+        const boundsRight = bounds.x + bounds.width;
+        const boundsBottom = bounds.y + bounds.height;
+        const workLeft = Math.min(Math.max(workArea.x, bounds.x), boundsRight);
+        const workTop = Math.min(Math.max(workArea.y, bounds.y), boundsBottom);
+        const workRight = Math.min(
+            Math.max(workArea.x + workArea.width, bounds.x),
+            boundsRight
+        );
+        const workBottom = Math.min(
+            Math.max(workArea.y + workArea.height, bounds.y),
+            boundsBottom
+        );
+
+        if (workTop > bounds.y) {
+            reservedRects.push({
+                x: bounds.x,
+                y: bounds.y,
+                width: bounds.width,
+                height: workTop - bounds.y
+            });
+        }
+        if (workBottom < boundsBottom) {
+            reservedRects.push({
+                x: bounds.x,
+                y: workBottom,
+                width: bounds.width,
+                height: boundsBottom - workBottom
+            });
+        }
+        if (workLeft > bounds.x && workBottom > workTop) {
+            reservedRects.push({
+                x: bounds.x,
+                y: workTop,
+                width: workLeft - bounds.x,
+                height: workBottom - workTop
+            });
+        }
+        if (workRight < boundsRight && workBottom > workTop) {
+            reservedRects.push({
+                x: workRight,
+                y: workTop,
+                width: boundsRight - workRight,
+                height: workBottom - workTop
+            });
+        }
+    }
+
+    return reservedRects;
+}
+
 class DesktopHost {
     constructor(native, options = {}) {
         this.native = native;
@@ -13,6 +71,7 @@ class DesktopHost {
         this.position = null;
         this.size = null;
         this.iconRects = [];
+        this.reservedRects = [];
     }
 
     connect(windowHandle, desiredPosition, size) {
@@ -21,11 +80,14 @@ class DesktopHost {
 
         const iconRects = this.native.readIconRects(desktop);
         if (!Array.isArray(iconRects)) return false;
+        const reservedRects = this.native.readReservedRects?.(desktop) ?? [];
+        if (!Array.isArray(reservedRects)) return false;
+        const obstacles = [...iconRects, ...reservedRects];
 
         const position = findNearestFreePosition(
             desiredPosition,
             size,
-            iconRects,
+            obstacles,
             desktop.bounds,
             this.gap
         );
@@ -40,6 +102,7 @@ class DesktopHost {
         this.position = position;
         this.size = size;
         this.iconRects = iconRects;
+        this.reservedRects = reservedRects;
         return true;
     }
 
@@ -51,17 +114,20 @@ class DesktopHost {
 
         const iconRects = this.native.readIconRects(desktop);
         if (!Array.isArray(iconRects)) return false;
+        const reservedRects = this.native.readReservedRects?.(desktop) ?? [];
+        if (!Array.isArray(reservedRects)) return false;
+        const obstacles = [...iconRects, ...reservedRects];
 
         const desktopChanged = !this.desktop ||
             !this.native.sameHandle(this.desktop.parent, desktop.parent) ||
             !this.native.sameHandle(this.desktop.listView, desktop.listView);
 
         let position = this.position;
-        if (!isPositionFree(position, this.size, iconRects, this.gap)) {
+        if (!isPositionFree(position, this.size, obstacles, this.gap)) {
             position = findNearestFreePosition(
                 position,
                 this.size,
-                iconRects,
+                obstacles,
                 desktop.bounds,
                 this.gap
             );
@@ -78,6 +144,7 @@ class DesktopHost {
         this.desktop = desktop;
         this.position = position;
         this.iconRects = iconRects;
+        this.reservedRects = reservedRects;
         return true;
     }
 
@@ -90,7 +157,7 @@ class DesktopHost {
             this.position,
             targetPosition,
             this.size,
-            this.iconRects,
+            [...this.iconRects, ...this.reservedRects],
             this.desktop.bounds,
             this.gap
         );
@@ -118,7 +185,7 @@ class DesktopHost {
     }
 }
 
-function createWindowsDesktopNative(koffi) {
+function createWindowsDesktopNative(koffi, options = {}) {
     const user32 = koffi.load('user32.dll');
     const kernel32 = koffi.load('kernel32.dll');
 
@@ -379,6 +446,7 @@ function createWindowsDesktopNative(koffi) {
     return {
         findDesktop,
         readIconRects,
+        readReservedRects: () => reservedRectsFromDisplays(options.getDisplays?.() ?? []),
         attachWindow,
         moveWindow: (windowHandle, desktop, position, size) => moveWindow(
             toAddress(windowHandle), desktop, position, size
@@ -400,5 +468,6 @@ function createWindowsDesktopNative(koffi) {
 
 module.exports = {
     DesktopHost,
-    createWindowsDesktopNative
+    createWindowsDesktopNative,
+    reservedRectsFromDisplays
 };

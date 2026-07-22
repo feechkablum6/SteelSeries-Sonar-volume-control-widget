@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { DesktopHost } = require('../desktop-host');
+const desktopHostModule = require('../desktop-host');
+const { DesktopHost } = desktopHostModule;
 
 function createNative(overrides = {}) {
     const calls = [];
@@ -16,6 +17,7 @@ function createNative(overrides = {}) {
         desktop,
         findDesktop: () => desktop,
         readIconRects: () => [{ x: 0, y: 0, width: 100, height: 100 }],
+        readReservedRects: () => [],
         attachWindow: (windowHandle, foundDesktop, position, size) => {
             calls.push(['attach', windowHandle, foundDesktop.parent, position, size]);
             return true;
@@ -104,4 +106,42 @@ test('moves to a free position when a new icon overlaps the widget', () => {
     assert.deepEqual(native.calls.at(-1).slice(0, 4), [
         'move', 'widget', 'progman-1', { x: 0, y: 0 }
     ]);
+});
+
+test('converts the taskbar outside the work area into a desktop obstacle', () => {
+    assert.equal(typeof desktopHostModule.reservedRectsFromDisplays, 'function');
+    assert.deepEqual(
+        desktopHostModule.reservedRectsFromDisplays([{
+            bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+            workArea: { x: 0, y: 0, width: 1920, height: 1032 }
+        }]),
+        [{ x: 0, y: 1032, width: 1920, height: 48 }]
+    );
+});
+
+test('restores a saved position above the taskbar', () => {
+    const native = createNative({
+        readIconRects: () => [],
+        readReservedRects: () => [{ x: 0, y: 180, width: 300, height: 20 }]
+    });
+    native.desktop.bounds = { x: 0, y: 0, width: 300, height: 200 };
+    const host = new DesktopHost(native);
+
+    host.connect('widget', { x: 100, y: 150 }, { width: 100, height: 100 });
+
+    assert.deepEqual(host.getPosition(), { x: 100, y: 80 });
+});
+
+test('stops the widget above the taskbar while dragging down', () => {
+    const native = createNative({
+        readIconRects: () => [],
+        readReservedRects: () => [{ x: 0, y: 180, width: 300, height: 20 }]
+    });
+    native.desktop.bounds = { x: 0, y: 0, width: 300, height: 200 };
+    const host = new DesktopHost(native);
+    host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+
+    const position = host.moveTowards({ x: 100, y: 150 });
+
+    assert.deepEqual(position, { x: 100, y: 80 });
 });
