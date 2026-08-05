@@ -63,24 +63,33 @@ test('keeps the desktop widget running while Chromium considers it hidden', () =
 
 test('rescans desktop icons on events instead of polling Explorer constantly', () => {
     const mainSource = readMainSource();
+    const hostSource = fs.readFileSync(
+        path.join(__dirname, '..', 'desktop-host.js'),
+        'utf8'
+    );
 
     const attachmentInterval = mainSource.match(
         /const DESKTOP_REFRESH_INTERVAL = (\d+)/
     );
-    const rescanInterval = mainSource.match(
+    const rescanInterval = hostSource.match(
         /const ICON_RESCAN_INTERVAL = (\d+)/
     );
 
     assert.ok(attachmentInterval, 'the cheap attachment check keeps its interval');
-    assert.ok(rescanInterval, 'a separate interval must govern the icon snapshot');
+    assert.ok(rescanInterval, 'a safety interval must back the icon snapshot');
     assert.ok(
         Number(rescanInterval[1]) >= 30000,
-        'the full icon snapshot must not run more often than every 30 seconds'
+        'the full icon snapshot must not run on a schedule tighter than 30 seconds'
+    );
+    assert.match(
+        hostSource,
+        /readIconCount/,
+        'the icon count is the cheap signal that the desktop shortcuts changed'
     );
     assert.match(
         mainSource,
-        /refresh\(\{\s*rescanIcons/,
-        'the desktop host must be told whether an icon snapshot is needed'
+        /desktopHost\?\.requestIconRescan\(\)/,
+        'desktop events must ask the host for a fresh icon snapshot'
     );
     assert.match(
         mainSource,

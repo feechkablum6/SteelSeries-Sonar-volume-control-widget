@@ -24,13 +24,10 @@ let dragSession = null;
 let globalInputMonitor = null;
 let autoLaunchController = null;
 let desktopRefreshPromise = null;
-let pendingIconRescan = true;
-let lastIconRescanAt = 0;
 let isQuitting = false;
 const settingsPath = path.join(app.getPath('userData'), 'widget-settings.json');
 const WIDGET_SIZE = { width: 450, height: 300 };
 const DESKTOP_REFRESH_INTERVAL = 1500;
-const ICON_RESCAN_INTERVAL = 60000;
 const WINDOW_RECOVERY_DELAY = 1500;
 const ICON_GAP = 6;
 
@@ -102,13 +99,11 @@ async function connectToDesktop() {
     const position = host.getPosition();
     console.log(`Desktop host initialized: position=${position.x},${position.y}`);
     saveSettings(position);
-    pendingIconRescan = false;
-    lastIconRescanAt = Date.now();
     return true;
 }
 
 function requestIconRescan() {
-    pendingIconRescan = true;
+    desktopHost?.requestIconRescan();
 }
 
 function refreshDesktop() {
@@ -116,21 +111,15 @@ function refreshDesktop() {
     if (!desktopHost || dragSession) return Promise.resolve(false);
 
     const host = desktopHost;
-    const rescanIcons = pendingIconRescan ||
-        Date.now() - lastIconRescanAt >= ICON_RESCAN_INTERVAL;
 
     desktopRefreshPromise = (async () => {
         const before = host.getPosition();
         if (!before) return connectToDesktop();
 
-        if (rescanIcons) {
-            pendingIconRescan = false;
-            lastIconRescanAt = Date.now();
-        }
         // Неудачный снимок не повторяется немедленно: занятый Explorer иначе
         // получал бы новый обход каждые полторы секунды. Привязка виджета при
-        // этом продолжает проверяться, а снимок повторится по расписанию.
-        if (!await host.refresh({ rescanIcons })) return false;
+        // этом продолжает проверяться, а снимок повторится по расписанию хоста.
+        if (!await host.refresh()) return false;
         if (host !== desktopHost) return false;
 
         const after = host.getPosition();
@@ -154,7 +143,6 @@ function createWindow() {
         });
     }
     desktopHost = new DesktopHost(desktopNative, { gap: ICON_GAP });
-    requestIconRescan();
 
     mainWindow = new BrowserWindow({
         width: WIDGET_SIZE.width,
@@ -328,9 +316,9 @@ ipcMain.handle('audio:get-full-state', async () => {
     catch (e) { return { success: false, error: e.message }; }
 });
 
-// Раскладка значков меняется редко, поэтому полный снимок запрашивается по
-// поводу, а не по таймеру: смена конфигурации экранов и возвращение из сна —
-// единственные моменты, когда Explorer переставляет значки без участия виджета.
+// Добавление и удаление ярлыков хост замечает сам по числу значков. Здесь
+// остаются поводы, при которых Explorer переставляет значки, не меняя их
+// количества: смена конфигурации экранов и возвращение из сна.
 function watchDesktopChanges() {
     screen.on('display-added', requestIconRescan);
     screen.on('display-removed', requestIconRescan);
