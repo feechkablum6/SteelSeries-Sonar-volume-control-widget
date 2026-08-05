@@ -1,6 +1,6 @@
-﻿const { app, BrowserWindow, ipcMain } = require('electron')
+﻿const { app, BrowserWindow, ipcMain, Menu } = require('electron')
 const path = require('path')
-const { screen } = require('electron')
+const { screen, powerMonitor } = require('electron')
 const fs = require('fs')
 const koffi = require('koffi')
 const audioController = require('./audio-controller')
@@ -10,6 +10,10 @@ const {
     GlobalInputMonitor,
     createWindowsGlobalInputNative
 } = require('./global-input-monitor')
+const {
+    createAutoLaunchController,
+    createWidgetMenuTemplate
+} = require('./widget-actions')
 
 let mainWindow = null;
 let desktopHost = null;
@@ -18,43 +22,28 @@ let desktopRefreshTimer = null;
 let windowRecoveryTimer = null;
 let dragSession = null;
 let globalInputMonitor = null;
+let autoLaunchController = null;
+let desktopRefreshPromise = null;
+let pendingIconRescan = true;
+let lastIconRescanAt = 0;
 let isQuitting = false;
 const settingsPath = path.join(app.getPath('userData'), 'widget-settings.json');
 const WIDGET_SIZE = { width: 450, height: 300 };
 const DESKTOP_REFRESH_INTERVAL = 1500;
+const ICON_RESCAN_INTERVAL = 60000;
 const WINDOW_RECOVERY_DELAY = 1500;
 const ICON_GAP = 6;
 
-// Автозапуск при старте Windows
-const APP_NAME = 'SonarGlassWidget';
-function setAutoLaunch(enable) {
-    if (process.platform !== 'win32') return;
-    
-    const exePath = app.getPath('exe');
-    const regKey = `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run`;
-    
-    if (enable) {
-        require('child_process').exec(`reg add "${regKey}" /v "${APP_NAME}" /t REG_SZ /d "\\"${exePath}\\"" /f`);
-    } else {
-        require('child_process').exec(`reg delete "${regKey}" /v "${APP_NAME}" /f`);
-    }
-}
-
-function isAutoLaunchEnabled() {
-    if (process.platform !== 'win32') return false;
-    
-    try {
-        const result = require('child_process').execSync(
-            `reg query "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" /v "${APP_NAME}"`,
-            { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
-        );
-        return result.includes(APP_NAME);
-    } catch {
-        return false;
-    }
-}
-
 app.disableHardwareAcceleration()
+
+// Виджет лежит в слое рабочего стола и почти всегда перекрыт другими окнами.
+// Без этих ключей Chromium считает его скрытым: таймеры синхронизации
+// замедляются до одного срабатывания в минуту, а requestAnimationFrame,
+// на котором держится перетаскивание, останавливается совсем.
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-features', 'CalculateNativeWinOcclusion')
 
 function loadSettings() {
     try {
@@ -79,11 +68,14 @@ function saveWidgetPosition() {
     if (position) saveSettings(position);
 }
 
-function connectToDesktop() {
-    if (!mainWindow || mainWindow.isDestroyed()) return false;
+async function connectToDesktop() {
+    const window = mainWindow;
+    const host = desktopHost;
+    const native = desktopNative;
+    if (!window || window.isDestroyed() || !host || !native) return false;
 
     const settings = loadSettings() || {};
-    const desktop = desktopNative.findDesktop();
+    const desktop = native.findDesktop();
     if (!desktop) return false;
 
     const desiredPosition = {
@@ -95,51 +87,74 @@ function connectToDesktop() {
             : desktop.bounds.y + Math.round((desktop.bounds.height - WIDGET_SIZE.height) / 2)
     };
 
-    mainWindow.showInactive();
-    const connected = desktopHost.connect(
-        mainWindow.getNativeWindowHandle(),
+    const connected = await host.connect(
+        window.getNativeWindowHandle(),
         desiredPosition,
         WIDGET_SIZE
     );
     if (!connected) {
-        mainWindow.hide();
+        if (!window.isDestroyed()) window.hide();
         return false;
     }
+    if (window !== mainWindow || host !== desktopHost || window.isDestroyed()) return false;
 
-    const activeDesktop = desktopNative.findDesktop();
-    const iconRects = activeDesktop ? desktopNative.readIconRects(activeDesktop) : null;
-    const position = desktopHost.getPosition();
-    console.log(
-        `Desktop host initialized: parent=${activeDesktop ? `0x${activeDesktop.parent.toString(16)}` : 'unknown'}, ` +
-        `icons=${iconRects?.length ?? 'unknown'}, ` +
-        `position=${position.x},${position.y}`
-    );
-    saveWidgetPosition();
+    window.showInactive();
+    const position = host.getPosition();
+    console.log(`Desktop host initialized: position=${position.x},${position.y}`);
+    saveSettings(position);
+    pendingIconRescan = false;
+    lastIconRescanAt = Date.now();
     return true;
 }
 
+function requestIconRescan() {
+    pendingIconRescan = true;
+}
+
 function refreshDesktop() {
-    if (!desktopHost || dragSession) return;
+    if (desktopRefreshPromise) return desktopRefreshPromise;
+    if (!desktopHost || dragSession) return Promise.resolve(false);
 
-    const before = desktopHost.getPosition();
-    if (!before) {
-        connectToDesktop();
-        return;
-    }
+    const host = desktopHost;
+    const rescanIcons = pendingIconRescan ||
+        Date.now() - lastIconRescanAt >= ICON_RESCAN_INTERVAL;
 
-    if (!desktopHost.refresh()) return;
-    const after = desktopHost.getPosition();
-    if (after && (after.x !== before.x || after.y !== before.y)) {
-        saveWidgetPosition();
-    }
+    desktopRefreshPromise = (async () => {
+        const before = host.getPosition();
+        if (!before) return connectToDesktop();
+
+        if (rescanIcons) {
+            pendingIconRescan = false;
+            lastIconRescanAt = Date.now();
+        }
+        // Неудачный снимок не повторяется немедленно: занятый Explorer иначе
+        // получал бы новый обход каждые полторы секунды. Привязка виджета при
+        // этом продолжает проверяться, а снимок повторится по расписанию.
+        if (!await host.refresh({ rescanIcons })) return false;
+        if (host !== desktopHost) return false;
+
+        const after = host.getPosition();
+        if (after && (after.x !== before.x || after.y !== before.y)) {
+            saveSettings(after);
+        }
+        return true;
+    })().finally(() => {
+        desktopRefreshPromise = null;
+    });
+    return desktopRefreshPromise;
 }
 
 function createWindow() {
     if (mainWindow || isQuitting) return;
-    desktopNative = createWindowsDesktopNative(koffi, {
-        getDisplays: () => screen.getAllDisplays()
-    });
+    // Нативный адаптер переживает пересоздание окна: повторный koffi.load
+    // регистрировал бы весь набор функций user32/kernel32 заново.
+    if (!desktopNative) {
+        desktopNative = createWindowsDesktopNative(koffi, {
+            getDisplays: () => screen.getAllDisplays()
+        });
+    }
     desktopHost = new DesktopHost(desktopNative, { gap: ICON_GAP });
+    requestIconRescan();
 
     mainWindow = new BrowserWindow({
         width: WIDGET_SIZE.width,
@@ -154,7 +169,11 @@ function createWindow() {
         focusable: false,
         show: false,
         icon: path.join(__dirname, 'icon-256.ico'),
-        webPreferences: { nodeIntegration: true, contextIsolation: false }
+        webPreferences: {
+            nodeIntegration: true,
+            contextIsolation: false,
+            backgroundThrottling: false
+        }
     });
     globalInputMonitor = new GlobalInputMonitor(
         createWindowsGlobalInputNative(koffi),
@@ -167,11 +186,35 @@ function createWindow() {
         }
     );
 
-    mainWindow.webContents.once('did-finish-load', () => {
-        if (!connectToDesktop()) {
+    mainWindow.webContents.on('context-menu', event => {
+        event.preventDefault();
+        if (!autoLaunchController || !mainWindow || mainWindow.isDestroyed()) return;
+
+        mainWindow.webContents.send('device-picker:dismiss', 'context-menu');
+        globalInputMonitor?.stop();
+        const menu = Menu.buildFromTemplate(createWidgetMenuTemplate({
+            autoLaunch: autoLaunchController,
+            quit: () => app.quit()
+        }));
+        menu.popup({ window: mainWindow });
+    });
+
+    mainWindow.webContents.once('did-finish-load', async () => {
+        const loadedWindow = mainWindow;
+        if (!await connectToDesktop()) {
             console.error('Desktop host is not available; waiting for Explorer');
         }
-        desktopRefreshTimer = setInterval(refreshDesktop, DESKTOP_REFRESH_INTERVAL);
+        if (
+            loadedWindow !== mainWindow ||
+            !loadedWindow ||
+            loadedWindow.isDestroyed()
+        ) {
+            return;
+        }
+        desktopRefreshTimer = setInterval(
+            () => void refreshDesktop(),
+            DESKTOP_REFRESH_INTERVAL
+        );
     });
 
     mainWindow.on('closed', () => {
@@ -194,7 +237,6 @@ function createWindow() {
 
 ipcMain.on('desktop:drag-start', (_, point) => {
     if (!isValidPoint(point) || !desktopHost?.getPosition()) return;
-    desktopHost.refresh();
     dragSession = beginDrag(point, desktopHost.getPosition());
 });
 
@@ -268,6 +310,15 @@ ipcMain.handle('audio:get-volume-data', async () => {
     catch (e) { return { success: false, error: e.message }; }
 });
 
+ipcMain.handle('audio:set-device', async (_, channelId, deviceId) => {
+    try {
+        const success = await audioController.setClassicRedirection(channelId, deviceId);
+        return { success };
+    } catch (e) {
+        return { success: false, error: e.message };
+    }
+});
+
 // Получить полное состояние для синхронизации
 ipcMain.handle('audio:get-full-state', async () => {
     try { 
@@ -277,11 +328,24 @@ ipcMain.handle('audio:get-full-state', async () => {
     catch (e) { return { success: false, error: e.message }; }
 });
 
+// Раскладка значков меняется редко, поэтому полный снимок запрашивается по
+// поводу, а не по таймеру: смена конфигурации экранов и возвращение из сна —
+// единственные моменты, когда Explorer переставляет значки без участия виджета.
+function watchDesktopChanges() {
+    screen.on('display-added', requestIconRescan);
+    screen.on('display-removed', requestIconRescan);
+    screen.on('display-metrics-changed', requestIconRescan);
+    powerMonitor.on('resume', requestIconRescan);
+    powerMonitor.on('unlock-screen', requestIconRescan);
+}
+
 app.whenReady().then(() => {
+    autoLaunchController = createAutoLaunchController(app);
+    watchDesktopChanges();
     // Включить автозапуск по умолчанию при первом запуске
     const settings = loadSettings() || {};
     if (settings.autoLaunchSet === undefined) {
-        setAutoLaunch(true);
+        autoLaunchController.setEnabled(true);
         settings.autoLaunchSet = true;
         saveSettings(settings);
     }
@@ -292,15 +356,8 @@ app.whenReady().then(() => {
 app.on('before-quit', () => {
     isQuitting = true;
     globalInputMonitor?.stop();
+    if (desktopRefreshTimer) clearInterval(desktopRefreshTimer);
+    desktopRefreshTimer = null;
     if (windowRecoveryTimer) clearTimeout(windowRecoveryTimer);
     windowRecoveryTimer = null;
-});
-
-ipcMain.handle('audio:set-device', async (_, channelId, deviceId) => {
-    try {
-        const success = await audioController.setClassicRedirection(channelId, deviceId);
-        return { success };
-    } catch (e) {
-        return { success: false, error: e.message };
-    }
 });

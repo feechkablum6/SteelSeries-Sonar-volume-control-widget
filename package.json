@@ -43,6 +43,8 @@
       "desktop-layout.js",
       "drag-position.js",
       "global-input-monitor.js",
+      "sync-gate.js",
+      "widget-actions.js",
       "index.html",
       "styles.css",
       "icon-256.ico"

@@ -74,11 +74,11 @@ class DesktopHost {
         this.reservedRects = [];
     }
 
-    connect(windowHandle, desiredPosition, size) {
+    async connect(windowHandle, desiredPosition, size) {
         const desktop = this.native.findDesktop();
         if (!desktop) return false;
 
-        const iconRects = this.native.readIconRects(desktop);
+        const iconRects = await this.native.readIconRects(desktop);
         if (!Array.isArray(iconRects)) return false;
         const reservedRects = this.native.readReservedRects?.(desktop) ?? [];
         if (!Array.isArray(reservedRects)) return false;
@@ -106,21 +106,42 @@ class DesktopHost {
         return true;
     }
 
-    refresh() {
+    // Проверка привязки дешёвая (несколько FindWindowEx), поэтому выполняется
+    // часто. Снимок значков стоит N кросс-процессных сообщений Explorer, поэтому
+    // запрашивается только при смене рабочего стола и по редкому расписанию.
+    async refresh(options = {}) {
+        const rescanIcons = options.rescanIcons ?? true;
         if (!this.windowHandle || !this.position || !this.size) return false;
 
         const desktop = this.native.findDesktop();
         if (!desktop) return false;
 
-        const iconRects = this.native.readIconRects(desktop);
+        const desktopChanged = !this.desktop ||
+            !this.native.sameHandle(this.desktop.parent, desktop.parent) ||
+            !this.native.sameHandle(this.desktop.listView, desktop.listView);
+
+        // При смене окна рабочего стола (Win+D, перезапуск Explorer) перепривязать
+        // виджет к новому родителю немедленно, с последней известной позицией —
+        // SetParent/SetWindowPos синхронны, и окно снова становится кликабельным
+        // за миллисекунды. Тяжёлый readIconRects (N кросс-процессных
+        // LVM_GETITEMRECT) идёт после и лишь корректирует позицию при перекрытии.
+        if (desktopChanged) {
+            if (!this.native.attachWindow(this.windowHandle, desktop, this.position, this.size)) {
+                return false;
+            }
+            this.desktop = desktop;
+        }
+
+        if (!rescanIcons && !desktopChanged) {
+            this.desktop = desktop;
+            return true;
+        }
+
+        const iconRects = await this.native.readIconRects(desktop);
         if (!Array.isArray(iconRects)) return false;
         const reservedRects = this.native.readReservedRects?.(desktop) ?? [];
         if (!Array.isArray(reservedRects)) return false;
         const obstacles = [...iconRects, ...reservedRects];
-
-        const desktopChanged = !this.desktop ||
-            !this.native.sameHandle(this.desktop.parent, desktop.parent) ||
-            !this.native.sameHandle(this.desktop.listView, desktop.listView);
 
         let position = this.position;
         if (!isPositionFree(position, this.size, obstacles, this.gap)) {
@@ -134,12 +155,10 @@ class DesktopHost {
             if (!position) return false;
         }
 
-        const applied = desktopChanged
-            ? this.native.attachWindow(this.windowHandle, desktop, position, this.size)
-            : this.positionsEqual(position, this.position) ||
-                this.native.moveWindow(this.windowHandle, desktop, position, this.size);
-
-        if (!applied) return false;
+        if (!this.positionsEqual(position, this.position) &&
+            !this.native.moveWindow(this.windowHandle, desktop, position, this.size)) {
+            return false;
+        }
 
         this.desktop = desktop;
         this.position = position;
@@ -185,7 +204,12 @@ class DesktopHost {
     }
 }
 
+// Предел ожидания одного сообщения Explorer и всего обхода значков (мс)
+const MESSAGE_TIMEOUT = 1000;
+const SNAPSHOT_TIMEOUT = 3000;
+
 function createWindowsDesktopNative(koffi, options = {}) {
+    const now = options.now ?? (() => Date.now());
     const user32 = koffi.load('user32.dll');
     const kernel32 = koffi.load('kernel32.dll');
 
@@ -196,7 +220,11 @@ function createWindowsDesktopNative(koffi, options = {}) {
         GetWindowRect: user32.func('GetWindowRect', 'int', ['void*', 'void*']),
         MapWindowPoints: user32.func('MapWindowPoints', 'int', ['void*', 'void*', 'void*', 'uint']),
         GetWindowThreadProcessId: user32.func('GetWindowThreadProcessId', 'uint32', ['void*', 'void*']),
-        SendMessageA: user32.func('SendMessageA', 'intptr_t', ['void*', 'uint32', 'uintptr_t', 'intptr_t']),
+        SendMessageTimeoutA: user32.func(
+            'SendMessageTimeoutA',
+            'intptr_t',
+            ['void*', 'uint32', 'uintptr_t', 'intptr_t', 'uint32', 'uint32', 'void*']
+        ),
         GetWindowLongA: user32.func('GetWindowLongA', 'long', ['void*', 'int']),
         SetWindowLongA: user32.func('SetWindowLongA', 'long', ['void*', 'int', 'long']),
         SetWindowLongPtrA: user32.func('SetWindowLongPtrA', 'intptr_t', ['void*', 'int', 'intptr_t']),
@@ -230,6 +258,7 @@ function createWindowsDesktopNative(koffi, options = {}) {
         SWP_NOOWNERZORDER: 0x0200,
         SWP_SHOWWINDOW: 0x0040,
         SWP_FRAMECHANGED: 0x0020,
+        SMTO_ABORTIFHUNG: 0x0002,
         PROCESS_RIGHTS: 0x0438,
         MEM_COMMIT_RESERVE: 0x3000,
         MEM_RELEASE: 0x8000,
@@ -261,6 +290,32 @@ function createWindowsDesktopNative(koffi, options = {}) {
             width: right - left,
             height: bottom - top
         };
+    }
+
+    // Ответ Explorer ограничен по времени: зависший shell иначе блокирует
+    // рабочий поток Koffi навсегда, и виджет больше никогда не перепривязывается
+    // к рабочему столу. SMTO_ABORTIFHUNG прекращает ожидание, как только
+    // Windows считает окно-получатель зависшим. null означает недоставку.
+    function sendDesktopMessage(windowHandle, message, wParam, lParam) {
+        return new Promise(resolve => {
+            const resultBuffer = Buffer.alloc(8);
+            api.SendMessageTimeoutA.async(
+                windowHandle,
+                message,
+                wParam,
+                lParam,
+                constants.SMTO_ABORTIFHUNG,
+                MESSAGE_TIMEOUT,
+                resultBuffer,
+                (error, delivered) => {
+                    if (error || !delivered) {
+                        resolve(null);
+                        return;
+                    }
+                    resolve(Number(resultBuffer.readBigInt64LE(0)));
+                }
+            );
+        });
     }
 
     function findChild(parent, className, title = null) {
@@ -303,7 +358,7 @@ function createWindowsDesktopNative(koffi, options = {}) {
         return null;
     }
 
-    function readIconRects(desktop) {
+    async function readIconRects(desktop) {
         if (!desktop?.listView || !api.IsWindow(desktop.listView)) return null;
 
         const pidBuffer = Buffer.alloc(4);
@@ -330,17 +385,35 @@ function createWindowsDesktopNative(koffi, options = {}) {
             return null;
         }
 
+        // Недоставленное по таймауту сообщение может дойти до Explorer позже и
+        // записать результат в этот буфер, поэтому освобождать его в таком
+        // случае нельзя: 16 байт остаются занятыми до перезапуска Explorer.
+        let remoteRectReleasable = true;
+
         try {
-            const count = Number(api.SendMessageA(
+            const count = await sendDesktopMessage(
                 desktop.listView,
                 constants.LVM_GETITEMCOUNT,
                 0,
                 0n
-            ));
+            );
+            if (count === null) {
+                remoteRectReleasable = false;
+                console.error('Explorer did not answer the desktop icon query in time');
+                return null;
+            }
             const rects = [];
             const localRect = Buffer.alloc(16);
+            const deadline = now() + SNAPSHOT_TIMEOUT;
 
             for (let index = 0; index < count; index += 1) {
+                // Медленный, но живой Explorer не должен занимать рабочий поток
+                // весь обход: неполный список значков хуже прежнего, поэтому
+                // снимок отбрасывается целиком и повторяется по расписанию.
+                if (now() > deadline) {
+                    console.error('Desktop icon snapshot exceeded its time budget');
+                    return null;
+                }
                 localRect.fill(0);
                 if (!api.WriteProcessMemory(
                     processHandle,
@@ -350,12 +423,17 @@ function createWindowsDesktopNative(koffi, options = {}) {
                     0n
                 )) continue;
 
-                const success = api.SendMessageA(
+                const success = await sendDesktopMessage(
                     desktop.listView,
                     constants.LVM_GETITEMRECT,
                     index,
                     remoteRect
                 );
+                if (success === null) {
+                    remoteRectReleasable = false;
+                    console.error('Explorer did not answer the desktop icon query in time');
+                    return null;
+                }
                 if (!success) continue;
 
                 if (!api.ReadProcessMemory(
@@ -373,7 +451,9 @@ function createWindowsDesktopNative(koffi, options = {}) {
 
             return rects;
         } finally {
-            api.VirtualFreeEx(processHandle, remoteRect, 0, constants.MEM_RELEASE);
+            if (remoteRectReleasable) {
+                api.VirtualFreeEx(processHandle, remoteRect, 0, constants.MEM_RELEASE);
+            }
             api.CloseHandle(processHandle);
         }
     }

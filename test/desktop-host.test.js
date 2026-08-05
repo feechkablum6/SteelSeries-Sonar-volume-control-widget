@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const desktopHostModule = require('../desktop-host');
-const { DesktopHost } = desktopHostModule;
+const { DesktopHost, createWindowsDesktopNative } = desktopHostModule;
 
 function createNative(overrides = {}) {
     const calls = [];
@@ -31,11 +31,11 @@ function createNative(overrides = {}) {
     };
 }
 
-test('connects to the desktop and relocates away from an icon', () => {
+test('connects to the desktop and relocates away from an icon', async () => {
     const native = createNative();
     const host = new DesktopHost(native, { gap: 0 });
 
-    const connected = host.connect(
+    const connected = await host.connect(
         'widget',
         { x: 0, y: 0 },
         { width: 100, height: 100 }
@@ -52,12 +52,12 @@ test('connects to the desktop and relocates away from an icon', () => {
     ]);
 });
 
-test('moves the widget against icon walls', () => {
+test('moves the widget against icon walls', async () => {
     const native = createNative({
         readIconRects: () => [{ x: 150, y: 0, width: 50, height: 100 }]
     });
     const host = new DesktopHost(native);
-    host.connect('widget', { x: 0, y: 0 }, { width: 100, height: 100 });
+    await host.connect('widget', { x: 0, y: 0 }, { width: 100, height: 100 });
 
     const position = host.moveTowards({ x: 250, y: 0 });
 
@@ -67,7 +67,7 @@ test('moves the widget against icon walls', () => {
     ]);
 });
 
-test('reattaches when Explorer replaces the desktop window', () => {
+test('reattaches when Explorer replaces the desktop window', async () => {
     let activeDesktop = {
         parent: 'progman-1',
         listView: 'list-1',
@@ -78,14 +78,14 @@ test('reattaches when Explorer replaces the desktop window', () => {
         readIconRects: () => []
     });
     const host = new DesktopHost(native);
-    host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
 
     activeDesktop = {
         parent: 'progman-2',
         listView: 'list-2',
         bounds: { x: 0, y: 0, width: 300, height: 100 }
     };
-    const refreshed = host.refresh();
+    const refreshed = await host.refresh();
 
     assert.equal(refreshed, true);
     assert.deepEqual(native.calls.at(-1).slice(0, 3), [
@@ -93,14 +93,14 @@ test('reattaches when Explorer replaces the desktop window', () => {
     ]);
 });
 
-test('moves to a free position when a new icon overlaps the widget', () => {
+test('moves to a free position when a new icon overlaps the widget', async () => {
     let iconRects = [];
     const native = createNative({ readIconRects: () => iconRects });
     const host = new DesktopHost(native);
-    host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
 
     iconRects = [{ x: 100, y: 0, width: 100, height: 100 }];
-    host.refresh();
+    await host.refresh();
 
     assert.deepEqual(host.getPosition(), { x: 0, y: 0 });
     assert.deepEqual(native.calls.at(-1).slice(0, 4), [
@@ -119,7 +119,7 @@ test('converts the taskbar outside the work area into a desktop obstacle', () =>
     );
 });
 
-test('restores a saved position above the taskbar', () => {
+test('restores a saved position above the taskbar', async () => {
     const native = createNative({
         readIconRects: () => [],
         readReservedRects: () => [{ x: 0, y: 180, width: 300, height: 20 }]
@@ -127,21 +127,250 @@ test('restores a saved position above the taskbar', () => {
     native.desktop.bounds = { x: 0, y: 0, width: 300, height: 200 };
     const host = new DesktopHost(native);
 
-    host.connect('widget', { x: 100, y: 150 }, { width: 100, height: 100 });
+    await host.connect('widget', { x: 100, y: 150 }, { width: 100, height: 100 });
 
     assert.deepEqual(host.getPosition(), { x: 100, y: 80 });
 });
 
-test('stops the widget above the taskbar while dragging down', () => {
+test('stops the widget above the taskbar while dragging down', async () => {
     const native = createNative({
         readIconRects: () => [],
         readReservedRects: () => [{ x: 0, y: 180, width: 300, height: 20 }]
     });
     native.desktop.bounds = { x: 0, y: 0, width: 300, height: 200 };
     const host = new DesktopHost(native);
-    host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
 
     const position = host.moveTowards({ x: 100, y: 150 });
 
     assert.deepEqual(position, { x: 100, y: 80 });
+});
+
+function createFakeExplorer() {
+    const definitions = [];
+    const messages = [];
+    const released = [];
+    const callbacks = [];
+    const sendMessageTimeout = () => {
+        throw new Error('SendMessageTimeoutA must not run synchronously');
+    };
+    sendMessageTimeout.async = (
+        _,
+        message,
+        wParam,
+        lParam,
+        flags,
+        timeout,
+        resultBuffer,
+        callback
+    ) => {
+        messages.push({ message, wParam, lParam, flags, timeout });
+        callbacks.push((sent, messageResult = 0) => {
+            resultBuffer.writeBigInt64LE(BigInt(messageResult), 0);
+            callback(null, sent);
+        });
+    };
+    const functions = {
+        IsWindow: () => 1,
+        GetWindowThreadProcessId: (_, processIdBuffer) => {
+            processIdBuffer.writeUInt32LE(42, 0);
+            return 1;
+        },
+        OpenProcess: () => 2n,
+        VirtualAllocEx: () => 3n,
+        VirtualFreeEx: () => {
+            released.push('memory');
+            return 1;
+        },
+        CloseHandle: () => {
+            released.push('process');
+            return 1;
+        },
+        WriteProcessMemory: () => 1,
+        ReadProcessMemory: () => 1,
+        MapWindowPoints: () => 1,
+        SendMessageTimeoutA: sendMessageTimeout
+    };
+    const fakeKoffi = {
+        load: () => ({
+            func(name) {
+                definitions.push(name);
+                return functions[name] || (() => 0);
+            }
+        }),
+        address: value => BigInt(value)
+    };
+
+    return { definitions, messages, released, callbacks, fakeKoffi };
+}
+
+test('reads Explorer messages on a worker and releases resources after completion', async () => {
+    const explorer = createFakeExplorer();
+
+    const native = createWindowsDesktopNative(explorer.fakeKoffi);
+    const resultPromise = native.readIconRects({ listView: 1n });
+
+    assert.equal(typeof resultPromise?.then, 'function');
+    assert.equal(explorer.definitions.includes('SendMessageTimeoutA'), true);
+    assert.equal(explorer.messages.length, 1);
+    assert.deepEqual(explorer.released, []);
+
+    explorer.callbacks.shift()(1, 1);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(explorer.messages.length, 2);
+    assert.deepEqual(explorer.released, []);
+
+    explorer.callbacks.shift()(1, 1);
+    const result = await resultPromise;
+
+    assert.deepEqual(result, []);
+    assert.deepEqual(explorer.released, ['memory', 'process']);
+});
+
+test('bounds every Explorer message and aborts when the shell hangs', async () => {
+    const explorer = createFakeExplorer();
+
+    const native = createWindowsDesktopNative(explorer.fakeKoffi);
+    const resultPromise = native.readIconRects({ listView: 1n });
+
+    const [request] = explorer.messages;
+    assert.ok(request.timeout > 0, 'the message must carry a timeout');
+    assert.equal(request.flags & 0x2, 0x2, 'SMTO_ABORTIFHUNG must be set');
+
+    explorer.callbacks.shift()(0);
+
+    assert.equal(await resultPromise, null);
+    assert.deepEqual(
+        explorer.released,
+        ['process'],
+        'remote memory must stay allocated while Explorer may still write to it'
+    );
+});
+
+test('gives up on a snapshot that a slow Explorer drags out', async () => {
+    const explorer = createFakeExplorer();
+    let clock = 0;
+
+    const native = createWindowsDesktopNative(explorer.fakeKoffi, {
+        now: () => clock
+    });
+    const resultPromise = native.readIconRects({ listView: 1n });
+
+    explorer.callbacks.shift()(1, 5);
+    await new Promise(resolve => setImmediate(resolve));
+
+    clock += 60000;
+    explorer.callbacks.shift()(1, 1);
+
+    assert.equal(await resultPromise, null);
+    assert.equal(
+        explorer.messages.length,
+        2,
+        'the remaining icons must not be queried after the deadline'
+    );
+    assert.deepEqual(
+        explorer.released,
+        ['memory', 'process'],
+        'every message finished, so the remote buffer is safe to release'
+    );
+});
+
+test('connect waits asynchronously for the icon snapshot before attaching', async () => {
+    let finishRead;
+    const native = createNative({
+        readIconRects: () => new Promise(resolve => {
+            finishRead = resolve;
+        })
+    });
+    const host = new DesktopHost(native);
+
+    const connectPromise = host.connect(
+        'widget',
+        { x: 100, y: 0 },
+        { width: 100, height: 100 }
+    );
+
+    assert.equal(typeof connectPromise?.then, 'function');
+    assert.deepEqual(native.calls, []);
+
+    finishRead([]);
+    assert.equal(await connectPromise, true);
+    assert.equal(native.calls[0][0], 'attach');
+});
+
+test('keeps the attachment alive without polling Explorer for icons', async () => {
+    let reads = 0;
+    const native = createNative({
+        readIconRects: () => { reads += 1; return []; }
+    });
+    const host = new DesktopHost(native);
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+    reads = 0;
+
+    assert.equal(await host.refresh({ rescanIcons: false }), true);
+    assert.equal(reads, 0, 'a cheap refresh must not walk the icon list');
+    assert.deepEqual(host.getPosition(), { x: 100, y: 0 });
+
+    assert.equal(await host.refresh({ rescanIcons: true }), true);
+    assert.equal(reads, 1);
+});
+
+test('rescans icons even on a cheap refresh when the desktop window changed', async () => {
+    let activeDesktop = {
+        parent: 'progman-1',
+        listView: 'list-1',
+        bounds: { x: 0, y: 0, width: 300, height: 100 }
+    };
+    const order = [];
+    const native = createNative({
+        findDesktop: () => activeDesktop,
+        readIconRects: () => { order.push('readIconRects'); return []; },
+        attachWindow: (_windowHandle, foundDesktop) => {
+            order.push(`attach:${foundDesktop.parent}`);
+            return true;
+        }
+    });
+    const host = new DesktopHost(native);
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+
+    order.length = 0;
+    activeDesktop = {
+        parent: 'progman-2',
+        listView: 'list-2',
+        bounds: { x: 0, y: 0, width: 300, height: 100 }
+    };
+
+    assert.equal(await host.refresh({ rescanIcons: false }), true);
+    assert.deepEqual(order, ['attach:progman-2', 'readIconRects']);
+});
+
+test('refresh reattaches to the new desktop before re-reading icon rects', async () => {
+    let activeDesktop = {
+        parent: 'progman-1',
+        listView: 'list-1',
+        bounds: { x: 0, y: 0, width: 300, height: 100 }
+    };
+    const order = [];
+    const native = createNative({
+        findDesktop: () => activeDesktop,
+        readIconRects: () => { order.push('readIconRects'); return []; },
+        attachWindow: (_windowHandle, foundDesktop) => {
+            order.push(`attach:${foundDesktop.parent}`);
+            return true;
+        }
+    });
+    const host = new DesktopHost(native);
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+
+    order.length = 0;
+    activeDesktop = {
+        parent: 'progman-2',
+        listView: 'list-2',
+        bounds: { x: 0, y: 0, width: 300, height: 100 }
+    };
+
+    const refreshed = await host.refresh();
+
+    assert.equal(refreshed, true);
+    assert.deepEqual(order, ['attach:progman-2', 'readIconRects']);
 });

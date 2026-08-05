@@ -118,8 +118,8 @@ body {
 
 .icon {
     font-size: 14px;
-    color: #ffffff;
-    text-shadow: 0 0 6px rgba(255, 255, 255, 0.8);
+    color: rgba(255, 255, 255, 0.72);
+    text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
 .title {
@@ -127,7 +127,7 @@ body {
     font-weight: 800;
     letter-spacing: 0px;
     text-transform: uppercase;
-    color: rgba(255, 255, 255, 0.95);
+    color: rgba(255, 255, 255, 0.78);
     text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
     margin-right: 0;
 }
@@ -139,7 +139,7 @@ body {
     justify-content: center;
     gap: 3px;
     width: 100%;
-    color: rgba(255, 255, 255, 0.7);
+    color: rgba(255, 255, 255, 0.55);
     font-size: 7px;
 }
 
@@ -180,38 +180,47 @@ body {
 .device-picker {
     position: fixed;
     z-index: 1200;
-    display: none;
     width: 205px;
     max-height: 220px;
-    padding: 7px;
+    padding: 4px;
     box-sizing: border-box;
-    border: 1px solid rgba(255, 255, 255, 0.22);
-    border-radius: 9px;
-    background: rgba(10, 18, 31, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 10px;
+    background: rgba(10, 18, 31, 0.97);
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
     backdrop-filter: blur(16px) saturate(130%);
     -webkit-backdrop-filter: blur(16px) saturate(130%);
     color: #fff;
+
+    /* Скрытый список остаётся в потоке, иначе появление нечем анимировать.
+       Собственный слой композитора — как у бегунка: окно с прозрачным фоном
+       иначе оставляет след от размытия и тени. */
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translateY(-6px) scale(0.96);
+    filter: blur(5px);
+    transition:
+        opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+        transform 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+        filter 0.18s cubic-bezier(0.16, 1, 0.3, 1),
+        visibility 0s linear 0.18s;
+    will-change: opacity, transform, filter;
 }
 
 .device-picker.open {
-    display: block;
-}
-
-.device-picker-title {
-    padding: 2px 5px 6px;
-    color: rgba(255, 255, 255, 0.56);
-    font-size: 9px;
-    font-weight: 700;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+    filter: none;
+    transition-delay: 0s;
 }
 
 .device-picker-list {
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    max-height: 184px;
+    max-height: 200px;
     overflow-y: auto;
 }
 
@@ -219,37 +228,57 @@ body {
 .device-picker-empty {
     width: 100%;
     box-sizing: border-box;
-    padding: 7px 8px;
+    padding: 6px 7px;
     border: 0;
     border-radius: 6px;
     text-align: left;
-    font: 10px/1.25 'Segoe UI', sans-serif;
+    font: 10px/1.3 'Segoe UI', sans-serif;
 }
 
 .device-picker-option {
+    display: flex;
+    align-items: center;
+    gap: 5px;
     background: transparent;
-    color: rgba(255, 255, 255, 0.82);
+    color: rgba(255, 255, 255, 0.78);
     cursor: pointer;
 }
 
+.device-picker-option + .device-picker-option {
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.device-picker-option::before {
+    content: "";
+    flex: 0 0 8px;
+    color: #72b7ff;
+    font-size: 9px;
+}
+
 .device-picker-option:hover {
-    background: rgba(71, 150, 255, 0.18);
+    background: rgba(71, 150, 255, 0.16);
     color: #fff;
 }
 
 .device-picker-option.selected {
-    background: rgba(65, 145, 255, 0.28);
+    background: rgba(65, 145, 255, 0.2);
     color: #fff;
 }
 
 .device-picker-option.selected::before {
     content: "✓";
-    margin-right: 6px;
-    color: #72b7ff;
 }
 
 .device-picker-empty {
     color: rgba(255, 255, 255, 0.48);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .device-picker {
+        transform: none;
+        filter: none;
+        transition: opacity 0.01s linear, visibility 0s linear 0.01s;
+    }
 }
 
 /* --- SLIDER AREA --- */
@@ -289,6 +318,11 @@ input[type=range].vertical-slider {
     z-index: 3;
     cursor: pointer;
     outline: none;
+
+    /* Собственный слой композитора: без него окно с прозрачным фоном
+       перерисовывает только область самого бегунка, а его свечение остаётся
+       призраком на прежнем месте. */
+    will-change: transform;
 }
 
 /* Track styling - invisible, using decorative bg instead */
@@ -306,19 +340,20 @@ input[type=range].vertical-slider::-webkit-slider-thumb {
     height: 10px;
     width: 10px;
     border-radius: 2px;
-    background: #ffffff;
+    background: rgba(255, 255, 255, 0.82);
     cursor: pointer;
-    box-shadow:
-        0 0 6px 1px rgba(255, 255, 255, 0.9),
-        0 0 12px 3px rgba(255, 255, 255, 0.3);
-    transition: box-shadow 0.2s;
-    margin-top: -3px; /* Center thumb on track: (thumb_height - track_height) / 2 */
+    box-shadow: 0 0 4px 1px rgba(255, 255, 255, 0.22);
+
+    /* Выравнивание бегунка по декоративной полосе. Формула (thumb - track) / 2
+       даёт -3px, но Chromium 120 рисует бегунок на пиксель ниже центра дорожки:
+       после поворота слайдера это уводит его вправо от полосы. Значение
+       подобрано замером готового кадра. */
+    margin-top: -4px;
 }
 
 input[type=range].vertical-slider::-webkit-slider-thumb:hover {
-    box-shadow:
-        0 0 10px 3px rgba(255, 255, 255, 1),
-        0 0 18px 5px rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 0 6px 2px rgba(255, 255, 255, 0.32);
 }
 
 /* --- FOOTER CONTROLS --- */

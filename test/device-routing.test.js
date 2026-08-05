@@ -1,3 +1,36 @@
+const testModule = require('node:test');
+const assertModule = require('node:assert/strict');
+const { orderDevicesForPicker } = require('../device-routing');
+
+testModule('lists the selected device first and keeps the rest in order', () => {
+    const route = {
+        selectedDeviceId: 'b',
+        devices: [
+            { id: 'a', friendlyName: 'A' },
+            { id: 'b', friendlyName: 'B' },
+            { id: 'c', friendlyName: 'C' }
+        ]
+    };
+
+    assertModule.deepEqual(
+        orderDevicesForPicker(route).map(device => device.id),
+        ['b', 'a', 'c']
+    );
+});
+
+testModule('keeps the original order when nothing is selected', () => {
+    const route = {
+        selectedDeviceId: '',
+        devices: [{ id: 'a' }, { id: 'b' }]
+    };
+
+    assertModule.deepEqual(
+        orderDevicesForPicker(route).map(device => device.id),
+        ['a', 'b']
+    );
+    assertModule.deepEqual(orderDevicesForPicker(null), []);
+});
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 

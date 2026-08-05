@@ -7,8 +7,13 @@ const fs = require('fs');
 const path = require('path');
 const { CHANNEL_IDS } = require('./device-routing');
 
-// Отключить проверку SSL
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+// Sonar слушает локально с самоподписанным сертификатом, поэтому проверка
+// отключается только для этих соединений, а не для всего процесса.
+// Соединения переиспользуются: без keep-alive синхронизация открывала бы
+// новый сокет и новое TLS-рукопожатие на каждый запрос.
+const AGENT_OPTIONS = { keepAlive: true, keepAliveMsecs: 15000, maxSockets: 4 };
+const httpAgent = new http.Agent(AGENT_OPTIONS);
+const httpsAgent = new https.Agent({ ...AGENT_OPTIONS, rejectUnauthorized: false });
 
 const CORE_PROPS_PATH = path.join(
     process.env.ProgramData || 'C:\\ProgramData',
@@ -32,14 +37,25 @@ let isInitialized = false;
 const ROUTING_CHANNELS = new Set(CHANNEL_IDS);
 
 /**
+ * Параметры запроса к локальному API Sonar
+ */
+function requestOptions(url, method = 'GET') {
+    const isHttps = url.startsWith('https');
+    return {
+        method,
+        agent: isHttps ? httpsAgent : httpAgent,
+        rejectUnauthorized: false
+    };
+}
+
+/**
  * HTTP запрос
  */
 function httpRequest(url, method = 'GET') {
     return new Promise((resolve, reject) => {
-        const isHttps = url.startsWith('https');
-        const lib = isHttps ? https : http;
-        
-        const req = lib.request(url, { method, rejectUnauthorized: false }, (res) => {
+        const lib = url.startsWith('https') ? https : http;
+
+        const req = lib.request(url, requestOptions(url, method), (res) => {
             let data = '';
             res.on('data', chunk => data += chunk);
             res.on('end', () => resolve({ status: res.statusCode, data }));
@@ -341,6 +357,7 @@ async function getFullState() {
 
 module.exports = {
     initialize,
+    requestOptions,
     getVolumeData,
     getVolume,
     setVolume,

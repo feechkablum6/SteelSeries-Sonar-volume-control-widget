@@ -30,8 +30,22 @@ function buildDeviceRouting(devices, redirections) {
     }));
 }
 
+// Выбранное устройство идёт первым: список открывается прямо под кнопкой,
+// и текущий выбор должен читаться без поиска глазами по строкам.
+function orderDevicesForPicker(route) {
+    const devices = route?.devices || [];
+    const selectedId = route?.selectedDeviceId;
+    if (!selectedId) return [...devices];
+
+    return [
+        ...devices.filter(device => device.id === selectedId),
+        ...devices.filter(device => device.id !== selectedId)
+    ];
+}
+
 module.exports = {
     CHANNEL_IDS,
     getSelectableDevices,
-    buildDeviceRouting
+    buildDeviceRouting,
+    orderDevicesForPicker
 };

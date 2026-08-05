@@ -2,19 +2,27 @@
 // Handles UI interactions for the volume mixer with real audio control
 
 const { ipcRenderer } = require('electron');
-const { buildDeviceRouting } = require('./device-routing');
+const { buildDeviceRouting, orderDevicesForPicker } = require('./device-routing');
+const { createSyncGate } = require('./sync-gate');
 
 // Сопоставление index канала с его ID (5 каналов, без master)
 const CHANNEL_IDS = ['game', 'chat', 'media', 'aux', 'mic'];
 
-// Флаг для предотвращения обновления во время перетаскивания слайдера
-let isUserDragging = false;
+// Синхронизация не запускается поверх незавершённой и не перебивает элемент,
+// который пользователь держит прямо сейчас.
+const syncGate = createSyncGate();
+
 let isDeviceSwitching = false;
 let deviceRouting = null;
 let activeDeviceChannel = null;
 
+// Кэш элементов каналов: channelId -> { slider, volDisplay, muteBtn, muteIcon, deviceNameEl }.
+// Заполняется один раз в DOMContentLoaded, чтобы не делать querySelector*
+// каждые 500 мс в updateVolumesFromState/updateDeviceNames.
+const channelCache = new Map();
+
 // Интервал синхронизации (мс)
-const SYNC_INTERVAL = 500;
+const SYNC_INTERVAL = 1000;
 
 ipcRenderer.on('device-picker:dismiss', () => closeDevicePicker());
 
@@ -23,17 +31,29 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupDesktopDrag();
     setupDevicePicker();
 
-    // Проверить доступность Sonar
-    const availabilityResult = await ipcRenderer.invoke('audio:check-availability');
-    if (!availabilityResult.success || !availabilityResult.available) {
-        console.error('SteelSeries Sonar не найден! Убедитесь, что GG запущен.');
-    }
-
+    // Привязать каналы и повесить обработчики кликов/инпутов синхронно —
+    // до любых await, чтобы виджет реагировал на клики с первого пэйнта.
+    // set-volume/set-mute сами вызывают initialize(), поэтому безопасны
+    // даже тогда, когда Sonar ещё не готов.
     channels.forEach((channel, index) => {
         const channelId = CHANNEL_IDS[index];
         channel.dataset.channelId = channelId;
         setupChannel(channel, channelId);
+        channelCache.set(channelId, {
+            slider: channel.querySelector('.vertical-slider'),
+            volDisplay: channel.querySelector('.device-vol'),
+            muteBtn: channel.querySelector('.mute-icon-btn'),
+            muteIcon: channel.querySelector('.mute-icon-btn')?.querySelector('.material-icons-round'),
+            deviceNameEl: channel.querySelector('.device-name')
+        });
     });
+
+    // Проверить доступность Sonar — только диагностика в консоль,
+    // она не должна гейтить взаимодействие с виджетом.
+    const availabilityResult = await ipcRenderer.invoke('audio:check-availability');
+    if (!availabilityResult.success || !availabilityResult.available) {
+        console.error('SteelSeries Sonar не найден! Убедитесь, что GG запущен.');
+    }
 
     // Загрузить начальное состояние
     await syncWithSonar();
@@ -94,14 +114,14 @@ function setupDesktopDrag() {
  * Синхронизация с Sonar API
  */
 async function syncWithSonar() {
-    if (isUserDragging || isDeviceSwitching) return;
+    if (isDeviceSwitching || !syncGate.tryStart()) return;
 
     try {
         const result = await ipcRenderer.invoke('audio:get-full-state');
         if (!result.success || !result.state) return;
 
         const { volumes, devices, redirections } = result.state;
-        
+
         // Обновить громкости и mute
         if (volumes?.devices) {
             updateVolumesFromState(volumes.devices);
@@ -111,6 +131,8 @@ async function syncWithSonar() {
         updateDeviceNames(deviceRouting);
     } catch (error) {
         console.error('Sync error:', error);
+    } finally {
+        syncGate.finish();
     }
 }
 
@@ -118,20 +140,14 @@ async function syncWithSonar() {
  * Обновить громкости из состояния API
  */
 function updateVolumesFromState(devicesData) {
-    const channels = document.querySelectorAll('.channel');
-    
-    channels.forEach((channel) => {
-        const channelId = channel.dataset.channelId;
+    for (const [channelId, refs] of channelCache) {
         const apiName = getApiNameForChannel(channelId);
-        if (!apiName || !devicesData[apiName]) return;
+        if (!apiName || !devicesData[apiName]) continue;
 
         const data = devicesData[apiName].classic;
-        if (!data) return;
+        if (!data) continue;
 
-        const slider = channel.querySelector('.vertical-slider');
-        const volDisplay = channel.querySelector('.device-vol');
-        const muteBtn = channel.querySelector('.mute-icon-btn');
-        const muteIcon = muteBtn?.querySelector('.material-icons-round');
+        const { slider, volDisplay, muteBtn, muteIcon } = refs;
 
         // Обновить слайдер (только если пользователь не перетаскивает)
         if (slider && volDisplay) {
@@ -146,7 +162,7 @@ function updateVolumesFromState(devicesData) {
         if (muteBtn && muteIcon) {
             const isMuted = data.muted;
             const currentlyMuted = muteBtn.classList.contains('muted');
-            
+
             if (isMuted !== currentlyMuted) {
                 if (isMuted) {
                     muteBtn.classList.add('muted');
@@ -159,25 +175,28 @@ function updateVolumesFromState(devicesData) {
                 }
             }
         }
-    });
+    }
 }
 
 /**
  * Обновить названия устройств
  */
 function updateDeviceNames(routing) {
-    CHANNEL_IDS.forEach(channelId => {
-        const channel = document.querySelector(`.channel[data-channel-id="${channelId}"]`);
-        if (!channel) return;
-
-        const deviceNameEl = channel.querySelector('.device-name');
-        if (!deviceNameEl || deviceNameEl.dataset.error === 'true') return;
+    for (const [channelId, refs] of channelCache) {
+        const { deviceNameEl } = refs;
+        if (!deviceNameEl || deviceNameEl.dataset.error === 'true') continue;
 
         const selectedDevice = routing?.[channelId]?.selectedDevice;
         const fullName = selectedDevice?.friendlyName || 'Не выбрано';
-        deviceNameEl.textContent = shortenDeviceName(fullName);
-        deviceNameEl.title = fullName;
-    });
+        const shortName = shortenDeviceName(fullName);
+
+        if (deviceNameEl.textContent !== shortName) {
+            deviceNameEl.textContent = shortName;
+        }
+        if (deviceNameEl.title !== fullName) {
+            deviceNameEl.title = fullName;
+        }
+    }
 }
 
 function setupDevicePicker() {
@@ -210,14 +229,12 @@ function setupDevicePicker() {
 
 function openDevicePicker(channelId, anchor) {
     const picker = document.querySelector('.device-picker');
-    const title = picker?.querySelector('.device-picker-title');
     const list = picker?.querySelector('.device-picker-list');
-    if (!picker || !title || !list) return;
+    if (!picker || !list) return;
 
     closeDevicePicker();
     activeDeviceChannel = channelId;
     anchor.setAttribute('aria-expanded', 'true');
-    title.textContent = channelId === 'mic' ? 'Устройство ввода' : 'Устройство вывода';
     renderDeviceOptions(channelId, list);
 
     picker.classList.add('open');
@@ -234,7 +251,7 @@ function openDevicePicker(channelId, anchor) {
 function renderDeviceOptions(channelId, list) {
     list.replaceChildren();
     const route = deviceRouting?.[channelId];
-    const devices = route?.devices || [];
+    const devices = orderDevicesForPicker(route);
 
     if (devices.length === 0) {
         const empty = document.createElement('div');
@@ -338,19 +355,22 @@ function setupChannel(channel, channelId) {
     const muteIcon = muteBtn.querySelector('.material-icons-round');
 
     if (slider && volDisplay) {
-        // Начало перетаскивания
-        slider.addEventListener('mousedown', () => { isUserDragging = true; });
-        slider.addEventListener('touchstart', () => { isUserDragging = true; });
-        
-        // Конец перетаскивания
-        slider.addEventListener('mouseup', () => { isUserDragging = false; });
-        slider.addEventListener('touchend', () => { isUserDragging = false; });
-        slider.addEventListener('mouseleave', () => { isUserDragging = false; });
+        // Пока слайдер удерживают, синхронизация не перебивает его значение.
+        // Указательные события доводятся браузером до конца даже когда кнопку
+        // отпустили за пределами виджета, поэтому удержание не залипает.
+        const holdKind = `slider:${channelId}`;
+        const releaseHold = () => syncGate.endHold(holdKind);
+
+        slider.addEventListener('pointerdown', () => syncGate.beginHold(holdKind));
+        slider.addEventListener('pointerup', releaseHold);
+        slider.addEventListener('pointercancel', releaseHold);
+        slider.addEventListener('lostpointercapture', releaseHold);
 
         // Обработка изменения громкости
         slider.addEventListener('input', async (e) => {
             const value = parseInt(e.target.value);
             volDisplay.textContent = `${value}%`;
+            syncGate.touchHold(holdKind);
 
             try {
                 await ipcRenderer.invoke('audio:set-volume', channelId, value);
