@@ -95,7 +95,10 @@ test('reattaches when Explorer replaces the desktop window', async () => {
 
 test('moves to a free position when a new icon overlaps the widget', async () => {
     let iconRects = [];
-    const native = createNative({ readIconRects: () => iconRects });
+    const native = createNative({
+        readIconRects: () => iconRects,
+        readIconCount: () => iconRects.length
+    });
     const host = new DesktopHost(native);
     await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
 
@@ -275,6 +278,25 @@ test('gives up on a snapshot that a slow Explorer drags out', async () => {
     );
 });
 
+test('asks Explorer for the icon count with a single message', async () => {
+    const explorer = createFakeExplorer();
+
+    const native = createWindowsDesktopNative(explorer.fakeKoffi);
+    const countPromise = native.readIconCount({ listView: 1n });
+
+    assert.equal(explorer.messages.length, 1);
+    assert.equal(explorer.messages[0].message, 0x1004, 'LVM_GETITEMCOUNT');
+
+    explorer.callbacks.shift()(1, 7);
+
+    assert.equal(await countPromise, 7);
+    assert.equal(
+        explorer.messages.length,
+        1,
+        'counting icons must not walk the icon list'
+    );
+});
+
 test('connect waits asynchronously for the icon snapshot before attaching', async () => {
     let finishRead;
     const native = createNative({
@@ -293,6 +315,7 @@ test('connect waits asynchronously for the icon snapshot before attaching', asyn
     assert.equal(typeof connectPromise?.then, 'function');
     assert.deepEqual(native.calls, []);
 
+    await new Promise(resolve => setImmediate(resolve));
     finishRead([]);
     assert.equal(await connectPromise, true);
     assert.equal(native.calls[0][0], 'attach');
@@ -301,21 +324,96 @@ test('connect waits asynchronously for the icon snapshot before attaching', asyn
 test('keeps the attachment alive without polling Explorer for icons', async () => {
     let reads = 0;
     const native = createNative({
-        readIconRects: () => { reads += 1; return []; }
+        readIconRects: () => { reads += 1; return []; },
+        readIconCount: () => 0
     });
     const host = new DesktopHost(native);
     await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
     reads = 0;
 
-    assert.equal(await host.refresh({ rescanIcons: false }), true);
-    assert.equal(reads, 0, 'a cheap refresh must not walk the icon list');
+    assert.equal(await host.refresh(), true);
+    assert.equal(reads, 0, 'an unchanged desktop must not be walked again');
     assert.deepEqual(host.getPosition(), { x: 100, y: 0 });
 
-    assert.equal(await host.refresh({ rescanIcons: true }), true);
+    host.requestIconRescan();
+    assert.equal(await host.refresh(), true);
     assert.equal(reads, 1);
 });
 
-test('rescans icons even on a cheap refresh when the desktop window changed', async () => {
+test('drops removed icons as soon as the desktop icon count changes', async () => {
+    let iconRects = [
+        { x: 0, y: 0, width: 100, height: 100 },
+        { x: 100, y: 0, width: 100, height: 100 }
+    ];
+    const native = createNative({
+        readIconRects: () => iconRects,
+        readIconCount: () => iconRects.length
+    });
+    const host = new DesktopHost(native);
+    await host.connect('widget', { x: 200, y: 0 }, { width: 100, height: 100 });
+
+    iconRects = [];
+    assert.equal(await host.refresh(), true);
+
+    assert.deepEqual(
+        host.moveTowards({ x: 0, y: 0 }),
+        { x: 0, y: 0 },
+        'a deleted shortcut must stop blocking the widget'
+    );
+});
+
+test('repeats a snapshot Explorer refused without walking the list every tick', async () => {
+    let clock = 0;
+    let reads = 0;
+    let iconRects = [];
+    const native = createNative({
+        readIconRects: () => { reads += 1; return iconRects; },
+        readIconCount: () => 1
+    });
+    const host = new DesktopHost(native, {
+        now: () => clock,
+        iconRescanInterval: 60000,
+        iconRescanRetryInterval: 5000
+    });
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+
+    iconRects = null;
+    reads = 0;
+    host.requestIconRescan();
+    assert.equal(await host.refresh(), false, 'a refused snapshot fails the refresh');
+    assert.equal(reads, 1);
+
+    clock += 1500;
+    await host.refresh();
+    assert.equal(reads, 1, 'a busy Explorer must not be walked again immediately');
+
+    clock += 5000;
+    iconRects = [];
+    assert.equal(await host.refresh(), true);
+    assert.equal(reads, 2, 'the snapshot must be retried well before the safety interval');
+});
+
+test('rescans icons on a quiet desktop when the safety interval elapses', async () => {
+    let clock = 0;
+    let reads = 0;
+    const native = createNative({
+        readIconRects: () => { reads += 1; return []; },
+        readIconCount: () => 0
+    });
+    const host = new DesktopHost(native, { now: () => clock, iconRescanInterval: 60000 });
+    await host.connect('widget', { x: 100, y: 0 }, { width: 100, height: 100 });
+    reads = 0;
+
+    clock += 59000;
+    await host.refresh();
+    assert.equal(reads, 0);
+
+    clock += 1000;
+    await host.refresh();
+    assert.equal(reads, 1);
+});
+
+test('rescans icons even on a quiet desktop when the desktop window changed', async () => {
     let activeDesktop = {
         parent: 'progman-1',
         listView: 'list-1',
@@ -325,6 +423,7 @@ test('rescans icons even on a cheap refresh when the desktop window changed', as
     const native = createNative({
         findDesktop: () => activeDesktop,
         readIconRects: () => { order.push('readIconRects'); return []; },
+        readIconCount: () => 0,
         attachWindow: (_windowHandle, foundDesktop) => {
             order.push(`attach:${foundDesktop.parent}`);
             return true;
@@ -340,7 +439,7 @@ test('rescans icons even on a cheap refresh when the desktop window changed', as
         bounds: { x: 0, y: 0, width: 300, height: 100 }
     };
 
-    assert.equal(await host.refresh({ rescanIcons: false }), true);
+    assert.equal(await host.refresh(), true);
     assert.deepEqual(order, ['attach:progman-2', 'readIconRects']);
 });
 

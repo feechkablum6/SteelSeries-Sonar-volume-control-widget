@@ -62,22 +62,42 @@ function reservedRectsFromDisplays(displays) {
     return reservedRects;
 }
 
+// Подстраховка на случай, когда значки переставили без изменения их числа
+// (сортировка, выравнивание по сетке, смена размера значков).
+const ICON_RESCAN_INTERVAL = 60000;
+// После отказа Explorer снимок повторяется скоро, но не на каждом тике.
+const ICON_RESCAN_RETRY_INTERVAL = 5000;
+
 class DesktopHost {
     constructor(native, options = {}) {
         this.native = native;
         this.gap = options.gap ?? 0;
+        this.now = options.now ?? (() => Date.now());
+        this.iconRescanInterval = options.iconRescanInterval ?? ICON_RESCAN_INTERVAL;
+        this.iconRescanRetryInterval =
+            options.iconRescanRetryInterval ?? ICON_RESCAN_RETRY_INTERVAL;
         this.windowHandle = null;
         this.desktop = null;
         this.position = null;
         this.size = null;
         this.iconRects = [];
         this.reservedRects = [];
+        this.iconCount = null;
+        this.nextIconRescanAt = 0;
+        this.pendingIconRescan = true;
+    }
+
+    // Внешний повод пересмотреть раскладку: смена конфигурации экранов или
+    // возвращение из сна, когда Explorer переставляет значки сам.
+    requestIconRescan() {
+        this.pendingIconRescan = true;
     }
 
     async connect(windowHandle, desiredPosition, size) {
         const desktop = this.native.findDesktop();
         if (!desktop) return false;
 
+        const iconCount = await this.readIconCount(desktop);
         const iconRects = await this.native.readIconRects(desktop);
         if (!Array.isArray(iconRects)) return false;
         const reservedRects = this.native.readReservedRects?.(desktop) ?? [];
@@ -103,14 +123,16 @@ class DesktopHost {
         this.size = size;
         this.iconRects = iconRects;
         this.reservedRects = reservedRects;
+        this.acceptIconSnapshot(iconCount);
         return true;
     }
 
     // Проверка привязки дешёвая (несколько FindWindowEx), поэтому выполняется
-    // часто. Снимок значков стоит N кросс-процессных сообщений Explorer, поэтому
-    // запрашивается только при смене рабочего стола и по редкому расписанию.
-    async refresh(options = {}) {
-        const rescanIcons = options.rescanIcons ?? true;
+    // часто. Полный снимок значков стоит N кросс-процессных сообщений Explorer,
+    // поэтому берётся, только когда состав значков разошёлся с прошлым снимком,
+    // сменился рабочий стол, пришло внешнее событие или истёк интервал
+    // подстраховки.
+    async refresh() {
         if (!this.windowHandle || !this.position || !this.size) return false;
 
         const desktop = this.native.findDesktop();
@@ -132,15 +154,33 @@ class DesktopHost {
             this.desktop = desktop;
         }
 
-        if (!rescanIcons && !desktopChanged) {
+        // Число значков стоит одного сообщения против N у полного обхода,
+        // поэтому спрашивается на каждом тике: удалённый или добавленный ярлык
+        // виден сразу, а не через интервал подстраховки.
+        const iconCount = await this.readIconCount(desktop);
+        const iconsChanged = iconCount !== null && iconCount !== this.iconCount;
+
+        if (
+            !desktopChanged &&
+            !iconsChanged &&
+            !this.pendingIconRescan &&
+            this.now() < this.nextIconRescanAt
+        ) {
             this.desktop = desktop;
             return true;
         }
 
         const iconRects = await this.native.readIconRects(desktop);
-        if (!Array.isArray(iconRects)) return false;
+        if (!Array.isArray(iconRects)) {
+            this.acceptIconSnapshot(iconCount, false);
+            return false;
+        }
         const reservedRects = this.native.readReservedRects?.(desktop) ?? [];
-        if (!Array.isArray(reservedRects)) return false;
+        if (!Array.isArray(reservedRects)) {
+            this.acceptIconSnapshot(iconCount, false);
+            return false;
+        }
+        this.acceptIconSnapshot(iconCount);
         const obstacles = [...iconRects, ...reservedRects];
 
         let position = this.position;
@@ -193,6 +233,22 @@ class DesktopHost {
 
         this.position = nextPosition;
         return this.position;
+    }
+
+    async readIconCount(desktop) {
+        const count = await this.native.readIconCount?.(desktop);
+        return Number.isFinite(count) ? count : null;
+    }
+
+    // Замеченное изменение считается обработанным независимо от исхода обхода:
+    // иначе отказ Explorer заставлял бы просить полный снимок на каждом тике.
+    // Неудача лишь сокращает паузу до следующей попытки.
+    acceptIconSnapshot(iconCount, succeeded = true) {
+        if (iconCount !== null) this.iconCount = iconCount;
+        this.pendingIconRescan = false;
+        this.nextIconRescanAt = this.now() + (succeeded
+            ? this.iconRescanInterval
+            : this.iconRescanRetryInterval);
     }
 
     getPosition() {
@@ -356,6 +412,18 @@ function createWindowsDesktopNative(koffi, options = {}) {
             if (workerDesktop) return workerDesktop;
         }
         return null;
+    }
+
+    // Одно сообщение вместо полного обхода: столько стоит узнать, что состав
+    // значков на рабочем столе изменился.
+    async function readIconCount(desktop) {
+        if (!desktop?.listView || !api.IsWindow(desktop.listView)) return null;
+        return sendDesktopMessage(
+            desktop.listView,
+            constants.LVM_GETITEMCOUNT,
+            0,
+            0n
+        );
     }
 
     async function readIconRects(desktop) {
@@ -525,6 +593,7 @@ function createWindowsDesktopNative(koffi, options = {}) {
 
     return {
         findDesktop,
+        readIconCount,
         readIconRects,
         readReservedRects: () => reservedRectsFromDisplays(options.getDisplays?.() ?? []),
         attachWindow,
